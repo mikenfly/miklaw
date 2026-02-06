@@ -35,6 +35,16 @@ function loadAuthStore(): AuthStore {
   try {
     if (fs.existsSync(AUTH_FILE)) {
       const data = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf-8'));
+
+      // Migrate old format to new format
+      if (!data.temporary_tokens) {
+        logger.info('Migrating auth store to new format');
+        return {
+          temporary_tokens: [],
+          permanent_tokens: data.tokens || data.permanent_tokens || [],
+        };
+      }
+
       return data;
     }
   } catch (err) {
