@@ -39,9 +39,19 @@ function loadAuthStore(): AuthStore {
       // Migrate old format to new format
       if (!data.temporary_tokens) {
         logger.info('Migrating auth store to new format');
+
+        // Migrate old tokens to new permanent format
+        const oldTokens = data.tokens || [];
+        const permanentTokens: PermanentToken[] = oldTokens.map((t: any) => ({
+          token: t.token,
+          device_name: t.deviceName || 'Legacy Device',
+          created_at: t.createdAt || new Date().toISOString(),
+          last_used: new Date().toISOString(),
+        }));
+
         return {
           temporary_tokens: [],
-          permanent_tokens: data.tokens || data.permanent_tokens || [],
+          permanent_tokens: permanentTokens,
         };
       }
 

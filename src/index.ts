@@ -865,6 +865,44 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
+  // Handle CLI commands for device management
+  const args = process.argv.slice(2);
+
+  if (args.includes('--list-devices')) {
+    const { initializeAuth, listDevices } = await import('./auth.js');
+    initializeAuth();
+    listDevices();
+    process.exit(0);
+  }
+
+  if (args.includes('--revoke-device')) {
+    const tokenOrName = args[args.indexOf('--revoke-device') + 1];
+    if (!tokenOrName) {
+      console.error('❌ Usage: npm start -- --revoke-device <token-ou-nom>');
+      process.exit(1);
+    }
+    const { initializeAuth, revokeToken } = await import('./auth.js');
+    initializeAuth();
+    const success = revokeToken(tokenOrName);
+    if (success) {
+      console.log(`✅ Device "${tokenOrName}" révoqué`);
+    } else {
+      console.error(`❌ Device "${tokenOrName}" non trouvé`);
+    }
+    process.exit(success ? 0 : 1);
+  }
+
+  if (args.includes('--generate-token')) {
+    const deviceName = args[args.indexOf('--generate-token') + 1] || 'CLI Device';
+    const { initializeAuth, generateTemporaryToken } = await import('./auth.js');
+    initializeAuth();
+    const token = generateTemporaryToken();
+    console.log('\n🔑 Token temporaire généré (valide 5 min):');
+    console.log(`   ${token}`);
+    console.log('\n💡 Utilisez ce token pour connecter un nouveau device\n');
+    process.exit(0);
+  }
+
   console.log('🚀 Démarrage NanoClaw...');
 
   // Load channels configuration
