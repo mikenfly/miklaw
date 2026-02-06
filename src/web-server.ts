@@ -6,7 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { getAllChats, getMessagesSince } from './db.js';
 import {
-  createAuthToken,
+  exchangeTemporaryToken,
   verifyToken,
   initializeAuth,
   getAllTokens,
@@ -65,21 +65,21 @@ export function startWebServer(
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
-  // Login endpoint
+  // Login endpoint - exchanges temporary token for permanent token
   app.post('/api/login', (req, res) => {
-    const { password, deviceName } = req.body;
+    const { token: tempToken, deviceName } = req.body;
 
-    if (!password) {
-      return res.status(400).json({ error: 'Password required' });
+    if (!tempToken) {
+      return res.status(400).json({ error: 'Token required' });
     }
 
-    const token = createAuthToken(password, deviceName);
+    const permanentToken = exchangeTemporaryToken(tempToken, deviceName || 'Unknown Device');
 
-    if (!token) {
-      return res.status(401).json({ error: 'Invalid password' });
+    if (!permanentToken) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    res.json({ token, expiresIn: '30d' });
+    res.json({ token: permanentToken });
   });
 
   // Get all conversations/groups
@@ -256,16 +256,16 @@ export function startWebServer(
     });
   });
 
-  // Token management endpoints
-  app.get('/api/tokens', authMiddleware, (req, res) => {
-    const tokens = getAllTokens();
-    res.json({ tokens });
+  // Device management endpoints
+  app.get('/api/devices', authMiddleware, (req, res) => {
+    const devices = getAllTokens();
+    res.json({ devices });
   });
 
-  app.delete('/api/tokens/:token', authMiddleware, (req, res) => {
+  app.delete('/api/devices/:token', authMiddleware, (req, res) => {
     const { token } = req.params;
-    revokeToken(token);
-    res.json({ success: true });
+    const success = revokeToken(token);
+    res.json({ success });
   });
 
   // WebSocket connection handling

@@ -4,123 +4,291 @@ import path from 'path';
 import { DATA_DIR } from './config.js';
 import { logger } from './logger.js';
 
-interface AuthToken {
+interface TemporaryToken {
   token: string;
-  createdAt: string;
-  expiresAt: string;
-  deviceName?: string;
+  created_at: string;
+  expires_at: string;
+  used: boolean;
+}
+
+interface PermanentToken {
+  token: string;
+  device_name: string;
+  created_at: string;
+  last_used: string;
 }
 
 interface AuthStore {
-  password: string;
-  tokens: AuthToken[];
+  temporary_tokens: TemporaryToken[];
+  permanent_tokens: PermanentToken[];
 }
 
 const AUTH_FILE = path.join(DATA_DIR, 'auth.json');
+const TEMP_TOKEN_TTL = 5 * 60 * 1000; // 5 minutes
+
+let authStore: AuthStore = {
+  temporary_tokens: [],
+  permanent_tokens: [],
+};
 
 function loadAuthStore(): AuthStore {
   try {
     if (fs.existsSync(AUTH_FILE)) {
-      return JSON.parse(fs.readFileSync(AUTH_FILE, 'utf-8'));
+      const data = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf-8'));
+      return data;
     }
   } catch (err) {
     logger.error({ err }, 'Failed to load auth store');
   }
-  return { password: '', tokens: [] };
+  return { temporary_tokens: [], permanent_tokens: [] };
 }
 
-function saveAuthStore(store: AuthStore): void {
-  fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true });
-  fs.writeFileSync(AUTH_FILE, JSON.stringify(store, null, 2));
-}
-
-function hashPassword(password: string): string {
-  return crypto.createHash('sha256').update(password).digest('hex');
+function saveAuthStore(): void {
+  try {
+    fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true });
+    fs.writeFileSync(AUTH_FILE, JSON.stringify(authStore, null, 2));
+  } catch (err) {
+    logger.error({ err }, 'Failed to save auth store');
+  }
 }
 
 function generateToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
-export function initializeAuth(initialPassword?: string): void {
-  const store = loadAuthStore();
+/**
+ * Initialize authentication system
+ */
+export function initializeAuth(): void {
+  authStore = loadAuthStore();
 
-  // If tokens already exist (from generate-token.js), don't require password
-  if (store.tokens && store.tokens.length > 0) {
-    logger.info('Authentication initialized with existing tokens');
-    return;
-  }
+  // Clean up expired temporary tokens
+  cleanupExpiredTokens();
 
-  if (!store.password && initialPassword) {
-    store.password = hashPassword(initialPassword);
-    saveAuthStore(store);
-    logger.info('Authentication initialized with password');
-  } else if (!store.password) {
-    // No password and no tokens - user should run generate-token.js
-    logger.info('No authentication configured. Run: node scripts/generate-token.js');
-    console.log('\n⚠️  Aucun token configuré. Exécutez: node scripts/generate-token.js\n');
-  }
+  logger.info(
+    {
+      temporary: authStore.temporary_tokens.length,
+      permanent: authStore.permanent_tokens.length,
+    },
+    'Authentication initialized'
+  );
 }
 
-export function verifyPassword(password: string): boolean {
-  const store = loadAuthStore();
-  return store.password === hashPassword(password);
-}
-
-export function createAuthToken(password: string, deviceName?: string): string | null {
-  // Si le mot de passe est 'auto-generated-for-qr', créer un token sans vérification
-  const skipPasswordCheck = password === 'auto-generated-for-qr';
-
-  if (!skipPasswordCheck && !verifyPassword(password)) {
-    return null;
-  }
-
+/**
+ * Generate a temporary token (for QR code pairing)
+ */
+export function generateTemporaryToken(): string {
   const token = generateToken();
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000); // 1 year for auto-generated
+  const expiresAt = new Date(now.getTime() + TEMP_TOKEN_TTL);
 
-  const store = loadAuthStore();
-  store.tokens.push({
+  const tempToken: TemporaryToken = {
     token,
-    createdAt: now.toISOString(),
-    expiresAt: expiresAt.toISOString(),
-    deviceName,
-  });
+    created_at: now.toISOString(),
+    expires_at: expiresAt.toISOString(),
+    used: false,
+  };
 
-  // Clean up old tokens (older than expiry)
-  store.tokens = store.tokens.filter(
-    (t) => new Date(t.expiresAt) > now
+  authStore.temporary_tokens.push(tempToken);
+  saveAuthStore();
+
+  logger.info(
+    { expiresAt: expiresAt.toISOString() },
+    'Temporary token generated'
   );
 
-  saveAuthStore(store);
-  logger.info({ deviceName }, 'Created new auth token');
   return token;
 }
 
-export function verifyToken(token: string): boolean {
-  const store = loadAuthStore();
+/**
+ * Verify a temporary token and create a permanent token if valid
+ */
+export function exchangeTemporaryToken(
+  tempToken: string,
+  deviceName: string
+): string | null {
   const now = new Date();
 
-  const tokenEntry = store.tokens.find((t) => t.token === token);
+  // Find the temporary token
+  const tokenEntry = authStore.temporary_tokens.find(
+    (t) => t.token === tempToken
+  );
+
+  if (!tokenEntry) {
+    logger.warn('Temporary token not found');
+    return null;
+  }
+
+  // Check if expired
+  if (new Date(tokenEntry.expires_at) < now) {
+    logger.warn('Temporary token expired');
+    return null;
+  }
+
+  // Check if already used
+  if (tokenEntry.used) {
+    logger.warn('Temporary token already used');
+    return null;
+  }
+
+  // Mark as used
+  tokenEntry.used = true;
+
+  // Generate permanent token
+  const permanentToken = generateToken();
+  const permToken: PermanentToken = {
+    token: permanentToken,
+    device_name: deviceName || 'Unknown Device',
+    created_at: now.toISOString(),
+    last_used: now.toISOString(),
+  };
+
+  authStore.permanent_tokens.push(permToken);
+  saveAuthStore();
+
+  logger.info(
+    { deviceName: permToken.device_name },
+    'Permanent token created from temporary token'
+  );
+
+  return permanentToken;
+}
+
+/**
+ * Verify a permanent token
+ */
+export function verifyPermanentToken(token: string): boolean {
+  const tokenEntry = authStore.permanent_tokens.find((t) => t.token === token);
+
   if (!tokenEntry) {
     return false;
   }
 
-  if (new Date(tokenEntry.expiresAt) < now) {
-    return false;
-  }
+  // Update last used
+  tokenEntry.last_used = new Date().toISOString();
+  saveAuthStore();
 
   return true;
 }
 
-export function revokeToken(token: string): void {
-  const store = loadAuthStore();
-  store.tokens = store.tokens.filter((t) => t.token !== token);
-  saveAuthStore(store);
-  logger.info('Revoked auth token');
+/**
+ * Verify any token (temporary or permanent)
+ * Used by middleware for backward compatibility
+ */
+export function verifyToken(token: string): boolean {
+  // Check permanent tokens first (most common case)
+  if (verifyPermanentToken(token)) {
+    return true;
+  }
+
+  // Check temporary tokens (for initial pairing)
+  const tempToken = authStore.temporary_tokens.find(
+    (t) => t.token === token && !t.used && new Date(t.expires_at) > new Date()
+  );
+
+  return !!tempToken;
 }
 
-export function getAllTokens(): AuthToken[] {
-  const store = loadAuthStore();
-  return store.tokens;
+/**
+ * Get all permanent tokens (for device management)
+ */
+export function getAllTokens(): PermanentToken[] {
+  return authStore.permanent_tokens;
+}
+
+/**
+ * Revoke a permanent token by token value or device name
+ */
+export function revokeToken(tokenOrDeviceName: string): boolean {
+  const initialLength = authStore.permanent_tokens.length;
+
+  authStore.permanent_tokens = authStore.permanent_tokens.filter(
+    (t) => t.token !== tokenOrDeviceName && t.device_name !== tokenOrDeviceName
+  );
+
+  if (authStore.permanent_tokens.length < initialLength) {
+    saveAuthStore();
+    logger.info({ tokenOrDeviceName }, 'Token revoked');
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Clean up expired temporary tokens
+ */
+function cleanupExpiredTokens(): void {
+  const now = new Date();
+  const initialLength = authStore.temporary_tokens.length;
+
+  authStore.temporary_tokens = authStore.temporary_tokens.filter(
+    (t) => !t.used && new Date(t.expires_at) > now
+  );
+
+  if (authStore.temporary_tokens.length < initialLength) {
+    saveAuthStore();
+    logger.info(
+      { cleaned: initialLength - authStore.temporary_tokens.length },
+      'Expired temporary tokens cleaned up'
+    );
+  }
+}
+
+/**
+ * Get first available token (for backward compatibility with ensureAccessToken)
+ */
+export function getFirstToken(): string | null {
+  // Try to get an existing permanent token
+  if (authStore.permanent_tokens.length > 0) {
+    return authStore.permanent_tokens[0].token;
+  }
+
+  // Try to get an unused temporary token
+  const tempToken = authStore.temporary_tokens.find(
+    (t) => !t.used && new Date(t.expires_at) > new Date()
+  );
+
+  if (tempToken) {
+    return tempToken.token;
+  }
+
+  return null;
+}
+
+/**
+ * CLI helper: List all devices
+ */
+export function listDevices(): void {
+  if (authStore.permanent_tokens.length === 0) {
+    console.log('\n📱 Aucun device connecté\n');
+    return;
+  }
+
+  console.log(`\n📱 Devices connectés (${authStore.permanent_tokens.length}):\n`);
+
+  authStore.permanent_tokens.forEach((token, index) => {
+    const lastUsed = new Date(token.last_used);
+    const now = new Date();
+    const diffMs = now.getTime() - lastUsed.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    let lastUsedStr = 'actif';
+    if (diffMins < 1) {
+      lastUsedStr = 'actif';
+    } else if (diffMins < 60) {
+      lastUsedStr = `il y a ${diffMins} min`;
+    } else if (diffHours < 24) {
+      lastUsedStr = `il y a ${diffHours}h`;
+    } else {
+      lastUsedStr = `il y a ${diffDays} jour${diffDays > 1 ? 's' : ''}`;
+    }
+
+    console.log(`${index + 1}. ${token.device_name}`);
+    console.log(`   Token: ${token.token.slice(0, 8)}...`);
+    console.log(`   Connecté: ${new Date(token.created_at).toLocaleString('fr-FR')}`);
+    console.log(`   Dernier accès: ${lastUsedStr}\n`);
+  });
 }

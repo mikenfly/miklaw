@@ -19,6 +19,11 @@ import {
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
+import { initializeAuth } from './auth.js';
+import { startWebServer, notifyNewMessage } from './web-server.js';
+import { setupTailscaleFunnel, displayConnectionQR, ensureAccessToken } from './tailscale-funnel.js';
+import { loadChannelsConfig, isChannelEnabled } from './channels-config.js';
+import { createPWAConversation } from './pwa-channel.js';
 import {
   AvailableGroup,
   runContainerAgent,
@@ -860,13 +865,82 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
+  console.log('🚀 Démarrage NanoClaw...');
+
+  // Load channels configuration
+  const channelsConfig = loadChannelsConfig();
+  console.log('✓ Configuration chargée');
+
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
   loadState();
-  await connectWhatsApp();
+  console.log('✓ État chargé');
+
+  // Start PWA channel if enabled
+  if (isChannelEnabled('pwa')) {
+    const pwaConfig = channelsConfig.channels.pwa!;
+    console.log('✓ Initialisation authentification...');
+    initializeAuth();
+
+    // Create default PWA conversation in standalone mode
+    if (pwaConfig.standalone) {
+      createPWAConversation('Conversation principale');
+      console.log('✓ Conversation PWA créée');
+    }
+
+    // Start web server immediately
+    console.log('✓ Démarrage serveur web...');
+    startWebServer(pwaConfig.port, () => registeredGroups, sendMessage);
+    console.log('✓ Serveur web démarré');
+
+    // Setup Tailscale Funnel if enabled
+    if (pwaConfig.tailscale_funnel) {
+      logger.info('Configuration de l\'accès web...');
+      setupTailscaleFunnel().then(async (funnelInfo) => {
+        if (funnelInfo) {
+          logger.info('Tailscale Funnel configuré avec succès');
+          const token = await ensureAccessToken();
+          displayConnectionQR(funnelInfo.funnelUrl, token);
+        } else {
+          logger.info('Tailscale Funnel non disponible - accès local');
+          const token = await ensureAccessToken();
+          console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+          console.log(`🌐 PWA disponible sur le réseau local`);
+          console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+          console.log(`📍 URL: http://localhost:${pwaConfig.port}`);
+          console.log(`🔑 Token: ${token}`);
+          console.log(`\n💡 Pour Tailscale Funnel public:`);
+          console.log(`   sudo tailscale set --operator=$USER`);
+          console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+        }
+      }).catch(async (err) => {
+        logger.error({ err }, 'Erreur configuration Funnel');
+        const token = await ensureAccessToken();
+        console.log(`\n🌐 PWA: http://localhost:${pwaConfig.port}`);
+        console.log(`🔑 Token: ${token}\n`);
+      });
+    } else {
+      // No Tailscale, just show local URL
+      const token = await ensureAccessToken();
+      console.log(`\n🌐 PWA: http://localhost:${pwaConfig.port}`);
+      console.log(`🔑 Token: ${token}\n`);
+    }
+  }
+
+  // Connect WhatsApp if enabled
+  console.log('✓ Configuration terminée');
+  if (isChannelEnabled('whatsapp')) {
+    console.log('✓ Connexion à WhatsApp...');
+    logger.info('Connexion à WhatsApp...');
+    await connectWhatsApp();
+  } else {
+    logger.info('WhatsApp désactivé');
+    console.log('\n💡 Pour activer WhatsApp: modifiez channels.yaml\n');
+  }
 }
 
+console.log('📦 Chargement des modules...');
 main().catch((err) => {
   logger.error({ err }, 'Failed to start NanoClaw');
   process.exit(1);

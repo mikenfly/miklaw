@@ -1,7 +1,6 @@
 import { execSync } from 'child_process';
 import qrcodeTerminal from 'qrcode-terminal';
 import { logger } from './logger.js';
-import { createAuthToken } from './auth.js';
 import { WEB_PORT } from './config.js';
 
 interface TailscaleInfo {
@@ -114,22 +113,19 @@ export function displayConnectionQR(
  * Génère un token d'accès automatiquement si nécessaire
  */
 export async function ensureAccessToken(): Promise<string> {
-  const { getAllTokens } = await import('./auth.js');
-  const tokens = getAllTokens();
+  const { getFirstToken, generateTemporaryToken } = await import('./auth.js');
 
-  // Si un token existe déjà, l'utiliser
-  if (tokens && tokens.length > 0) {
+  // Si un token existe déjà (permanent ou temporaire), l'utiliser
+  const existingToken = getFirstToken();
+  if (existingToken) {
     logger.info('Utilisation du token existant');
-    return tokens[0].token;
+    return existingToken;
   }
 
-  // Sinon créer un nouveau token automatiquement
-  logger.info('Génération d\'un nouveau token...');
-  const token = createAuthToken('auto-generated-for-qr', 'Auto QR');
-  if (!token) {
-    throw new Error('Failed to generate access token');
-  }
+  // Sinon créer un nouveau token temporaire pour le pairing
+  logger.info('Génération d\'un token temporaire (5 min)...');
+  const token = generateTemporaryToken();
 
-  logger.info('Token d\'accès généré automatiquement');
+  logger.info('Token temporaire généré');
   return token;
 }
