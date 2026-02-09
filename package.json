@@ -11,7 +11,9 @@
     "auth": "tsx src/whatsapp-auth.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\""
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "build:pwa": "cd pwa && npm run build",
+    "dev:pwa": "cd pwa && npm run dev"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.9",

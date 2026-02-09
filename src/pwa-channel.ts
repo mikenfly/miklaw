@@ -1,132 +1,144 @@
 import { runContainerAgent, writeTasksSnapshot, writeGroupsSnapshot } from './container-runner.js';
-import { getAllTasks } from './db.js';
-import { RegisteredGroup, Session } from './types.js';
+import {
+  createPWAConversationDB,
+  getPWAConversationDB,
+  getAllPWAConversationsDB,
+  renamePWAConversation as renamePWAConversationDB,
+  deletePWAConversation as deletePWAConversationDB,
+  addPWAMessage,
+  getPWAMessages as getPWAMessagesDB,
+  getPWARecentMessages,
+  generatePWAConversationId,
+  generatePWAMessageId,
+  PWAConversationRow,
+  PWAMessageRow,
+} from './db.js';
+import { ASSISTANT_NAME } from './config.js';
+import { RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
-interface PWAConversation {
-  id: string;
+// Session IDs for active conversations (not persisted — agent sessions are ephemeral per process lifecycle)
+const pwaSessions = new Map<string, string>();
+
+export interface PWAConversationInfo {
+  jid: string;
   name: string;
-  messages: PWAMessage[];
-  createdAt: string;
+  folder: string;
   lastActivity: string;
+  type: 'pwa';
 }
 
-interface PWAMessage {
+function toConversationInfo(row: PWAConversationRow): PWAConversationInfo {
+  return {
+    jid: row.id,
+    name: row.name,
+    folder: `pwa-${row.id}`,
+    lastActivity: row.last_activity,
+    type: 'pwa',
+  };
+}
+
+export interface PWAMessageInfo {
   id: string;
-  sender: 'user' | 'assistant';
+  chat_jid: string;
+  sender_name: string;
   content: string;
   timestamp: string;
+  is_from_me: boolean;
 }
 
-// In-memory storage for PWA conversations
-const pwaConversations = new Map<string, PWAConversation>();
-const pwaSessions = new Map<string, string>(); // conversationId -> sessionId
-
-/**
- * Créer une nouvelle conversation PWA
- */
-export function createPWAConversation(name?: string): PWAConversation {
-  const id = `pwa-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const conversation: PWAConversation = {
-    id,
-    name: name || `Conversation ${new Date().toLocaleString('fr-FR')}`,
-    messages: [],
-    createdAt: new Date().toISOString(),
-    lastActivity: new Date().toISOString(),
+function toMessageInfo(row: PWAMessageRow): PWAMessageInfo {
+  return {
+    id: row.id,
+    chat_jid: row.conversation_id,
+    sender_name: row.sender === 'user' ? 'You' : ASSISTANT_NAME,
+    content: row.sender === 'assistant' ? `${ASSISTANT_NAME}: ${row.content}` : row.content,
+    timestamp: row.timestamp,
+    is_from_me: row.sender === 'user',
   };
+}
 
-  pwaConversations.set(id, conversation);
+export function createPWAConversation(name?: string): PWAConversationInfo {
+  const id = generatePWAConversationId();
+  const convName = name || 'New conversation';
+  createPWAConversationDB(id, convName);
+
+  const row = getPWAConversationDB(id)!;
   logger.info({ conversationId: id }, 'PWA conversation created');
-
-  return conversation;
+  return toConversationInfo(row);
 }
 
-/**
- * Récupérer toutes les conversations PWA
- */
-export function getAllPWAConversations(): PWAConversation[] {
-  return Array.from(pwaConversations.values()).sort(
-    (a, b) => new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime()
-  );
+export function getAllPWAConversations(): PWAConversationInfo[] {
+  return getAllPWAConversationsDB().map(toConversationInfo);
 }
 
-/**
- * Récupérer une conversation PWA par ID
- */
-export function getPWAConversation(id: string): PWAConversation | null {
-  return pwaConversations.get(id) || null;
+export function getPWAConversation(id: string): PWAConversationInfo | null {
+  const row = getPWAConversationDB(id);
+  return row ? toConversationInfo(row) : null;
 }
 
-/**
- * Ajouter un message à une conversation PWA
- */
-function addMessageToConversation(
-  conversationId: string,
-  sender: 'user' | 'assistant',
-  content: string
-): PWAMessage {
-  const conversation = pwaConversations.get(conversationId);
-  if (!conversation) {
-    throw new Error('Conversation not found');
-  }
-
-  const message: PWAMessage = {
-    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    sender,
-    content,
-    timestamp: new Date().toISOString(),
-  };
-
-  conversation.messages.push(message);
-  conversation.lastActivity = message.timestamp;
-
-  return message;
+export function renamePWAConversation(id: string, name: string): boolean {
+  return renamePWAConversationDB(id, name);
 }
 
-/**
- * Envoyer un message à l'agent et obtenir une réponse (mode standalone PWA)
- */
+export function deletePWAConversation(id: string): boolean {
+  pwaSessions.delete(id);
+  return deletePWAConversationDB(id);
+}
+
+export function getPWAMessages(conversationId: string, since?: string): PWAMessageInfo[] {
+  const rows = since
+    ? getPWAMessagesDB(conversationId, since)
+    : getPWARecentMessages(conversationId, 50);
+  return rows.map(toMessageInfo);
+}
+
+export type OnStatusCallback = (conversationId: string, status: string) => void;
+
 export async function sendToPWAAgent(
   conversationId: string,
   userMessage: string,
-  assistantName: string
-): Promise<string> {
-  const conversation = pwaConversations.get(conversationId);
+  assistantName: string,
+  onStatus?: OnStatusCallback,
+): Promise<{ response: string; messageId: string }> {
+  const conversation = getPWAConversationDB(conversationId);
   if (!conversation) {
     throw new Error('Conversation not found');
   }
 
-  // Ajouter le message de l'utilisateur
-  addMessageToConversation(conversationId, 'user', userMessage);
+  // Store the user message
+  const userMsgId = generatePWAMessageId();
+  addPWAMessage(userMsgId, conversationId, 'user', userMessage);
 
-  // Construire le contexte pour l'agent
-  const recentMessages = conversation.messages.slice(-10); // Derniers 10 messages
-  const messagesXml = recentMessages.map(msg => {
-    const sender = msg.sender === 'user' ? 'User' : assistantName;
-    const escapeXml = (s: string) =>
-      s
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    return `<message sender="${escapeXml(sender)}" time="${msg.timestamp}">${escapeXml(msg.content)}</message>`;
-  }).join('\n');
+  // Build context for the agent (last 10 messages)
+  const recentMessages = getPWARecentMessages(conversationId, 10);
+  const escapeXml = (s: string) =>
+    s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+
+  const messagesXml = recentMessages
+    .map((msg) => {
+      const sender = msg.sender === 'user' ? 'User' : assistantName;
+      return `<message sender="${escapeXml(sender)}" time="${msg.timestamp}">${escapeXml(msg.content)}</message>`;
+    })
+    .join('\n');
 
   const prompt = `<messages>\n${messagesXml}\n</messages>`;
 
-  // Créer un groupe virtuel pour cette conversation PWA
+  // Virtual group for this PWA conversation
   const virtualGroup: RegisteredGroup = {
     name: conversation.name,
     folder: `pwa-${conversationId}`,
-    trigger: '', // Pas de trigger en mode standalone
-    added_at: conversation.createdAt,
+    trigger: '',
+    added_at: conversation.created_at,
   };
 
-  // Session ID pour cette conversation
   const sessionId = pwaSessions.get(conversationId);
 
-  // Préparer les snapshots
-  const tasks = getAllTasks();
+  // Prepare snapshots
   writeTasksSnapshot(virtualGroup.folder, false, []);
   writeGroupsSnapshot(virtualGroup.folder, false, [], new Set());
 
@@ -139,7 +151,7 @@ export async function sendToPWAAgent(
       groupFolder: virtualGroup.folder,
       chatJid: conversationId,
       isMain: false,
-    });
+    }, onStatus ? (status: string) => onStatus(conversationId, status) : undefined);
 
     if (output.newSessionId) {
       pwaSessions.set(conversationId, output.newSessionId);
@@ -147,14 +159,17 @@ export async function sendToPWAAgent(
 
     if (output.status === 'error') {
       logger.error({ conversationId, error: output.error }, 'PWA agent error');
-      return 'Désolé, une erreur est survenue.';
+      const errorMsg = 'Desole, une erreur est survenue.';
+      const errorMsgId = generatePWAMessageId();
+      addPWAMessage(errorMsgId, conversationId, 'assistant', errorMsg);
+      return { response: errorMsg, messageId: errorMsgId };
     }
 
-    // Ajouter la réponse de l'assistant
-    const response = output.result || 'Pas de réponse';
-    addMessageToConversation(conversationId, 'assistant', response);
+    const response = output.result || 'Pas de reponse';
+    const assistantMsgId = generatePWAMessageId();
+    addPWAMessage(assistantMsgId, conversationId, 'assistant', response);
 
-    return response;
+    return { response, messageId: assistantMsgId };
   } catch (err) {
     logger.error({ conversationId, err }, 'Failed to call PWA agent');
     throw err;

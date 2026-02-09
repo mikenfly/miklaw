@@ -47,11 +47,31 @@ async function readStdin(): Promise<string> {
 
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+const STATUS_PREFIX = '---NANOCLAW_STATUS---';
 
 function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_START_MARKER);
   console.log(JSON.stringify(output));
   console.log(OUTPUT_END_MARKER);
+}
+
+function emitStatus(text: string): void {
+  const payload = JSON.stringify({ status: text, timestamp: new Date().toISOString() });
+  console.log(`${STATUS_PREFIX}${payload}`);
+}
+
+function craftToolStatus(toolName: string, input: Record<string, any>): string {
+  switch (toolName) {
+    case 'Read': return `Lecture de ${input.file_path?.split('/').pop() || 'fichier'}...`;
+    case 'Write': return `Écriture de ${input.file_path?.split('/').pop() || 'fichier'}...`;
+    case 'Edit': return `Modification de ${input.file_path?.split('/').pop() || 'fichier'}...`;
+    case 'Bash': return `Exécution d'une commande...`;
+    case 'Glob': return `Recherche de fichiers...`;
+    case 'Grep': return `Recherche dans le code...`;
+    case 'WebSearch': return `Recherche sur le web...`;
+    case 'WebFetch': return `Récupération d'une page web...`;
+    default: return `Utilisation de ${toolName}...`;
+  }
 }
 
 function log(message: string): void {
@@ -259,6 +279,14 @@ async function main(): Promise<void> {
       if (message.type === 'system' && message.subtype === 'init') {
         newSessionId = message.session_id;
         log(`Session initialized: ${newSessionId}`);
+      }
+
+      if (message.type === 'assistant' && message.message?.content) {
+        for (const block of message.message.content) {
+          if (block.type === 'tool_use') {
+            emitStatus(craftToolStatus(block.name, (block as any).input || {}));
+          }
+        }
       }
 
       if ('result' in message && message.result) {

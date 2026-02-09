@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -60,6 +61,35 @@ export function initDatabase(): void {
       FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id)
     );
     CREATE INDEX IF NOT EXISTS idx_task_run_logs ON task_run_logs(task_id, run_at);
+
+    CREATE TABLE IF NOT EXISTS pwa_conversations (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_activity TEXT NOT NULL,
+      archived INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_pwa_conv_activity ON pwa_conversations(last_activity);
+
+    CREATE TABLE IF NOT EXISTS pwa_messages (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      sender TEXT NOT NULL,
+      content TEXT NOT NULL,
+      timestamp TEXT NOT NULL,
+      FOREIGN KEY (conversation_id) REFERENCES pwa_conversations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_pwa_msg_conv ON pwa_messages(conversation_id, timestamp);
+
+    CREATE TABLE IF NOT EXISTS pwa_push_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint TEXT NOT NULL UNIQUE,
+      keys_p256dh TEXT NOT NULL,
+      keys_auth TEXT NOT NULL,
+      device_token TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_device ON pwa_push_subscriptions(device_token);
   `);
 
   // Add sender_name column if it doesn't exist (migration for existing DBs)
@@ -393,4 +423,160 @@ export function getTaskRunLogs(taskId: string, limit = 10): TaskRunLog[] {
   `,
     )
     .all(taskId, limit) as TaskRunLog[];
+}
+
+// --- PWA Conversations CRUD ---
+
+export interface PWAConversationRow {
+  id: string;
+  name: string;
+  created_at: string;
+  last_activity: string;
+  archived: number;
+}
+
+export interface PWAMessageRow {
+  id: string;
+  conversation_id: string;
+  sender: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface PushSubscriptionRow {
+  id: number;
+  endpoint: string;
+  keys_p256dh: string;
+  keys_auth: string;
+  device_token: string | null;
+  created_at: string;
+}
+
+export function createPWAConversationDB(id: string, name: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO pwa_conversations (id, name, created_at, last_activity) VALUES (?, ?, ?, ?)`,
+  ).run(id, name, now, now);
+}
+
+export function getPWAConversationDB(
+  id: string,
+): PWAConversationRow | undefined {
+  return db
+    .prepare(`SELECT * FROM pwa_conversations WHERE id = ?`)
+    .get(id) as PWAConversationRow | undefined;
+}
+
+export function getAllPWAConversationsDB(): PWAConversationRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM pwa_conversations WHERE archived = 0 ORDER BY last_activity DESC`,
+    )
+    .all() as PWAConversationRow[];
+}
+
+export function renamePWAConversation(id: string, name: string): boolean {
+  const result = db
+    .prepare(`UPDATE pwa_conversations SET name = ? WHERE id = ?`)
+    .run(name, id);
+  return result.changes > 0;
+}
+
+export function deletePWAConversation(id: string): boolean {
+  db.prepare(`DELETE FROM pwa_messages WHERE conversation_id = ?`).run(id);
+  const result = db
+    .prepare(`DELETE FROM pwa_conversations WHERE id = ?`)
+    .run(id);
+  return result.changes > 0;
+}
+
+export function updatePWAConversationActivity(id: string): void {
+  const now = new Date().toISOString();
+  db.prepare(`UPDATE pwa_conversations SET last_activity = ? WHERE id = ?`).run(
+    now,
+    id,
+  );
+}
+
+export function addPWAMessage(
+  id: string,
+  conversationId: string,
+  sender: 'user' | 'assistant',
+  content: string,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO pwa_messages (id, conversation_id, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)`,
+  ).run(id, conversationId, sender, content, now);
+  updatePWAConversationActivity(conversationId);
+}
+
+export function getPWAMessages(
+  conversationId: string,
+  since?: string,
+): PWAMessageRow[] {
+  if (since) {
+    return db
+      .prepare(
+        `SELECT * FROM pwa_messages WHERE conversation_id = ? AND timestamp > ? ORDER BY timestamp ASC`,
+      )
+      .all(conversationId, since) as PWAMessageRow[];
+  }
+  return db
+    .prepare(
+      `SELECT * FROM pwa_messages WHERE conversation_id = ? ORDER BY timestamp ASC`,
+    )
+    .all(conversationId) as PWAMessageRow[];
+}
+
+export function getPWARecentMessages(
+  conversationId: string,
+  limit: number,
+): PWAMessageRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM (
+        SELECT * FROM pwa_messages WHERE conversation_id = ? ORDER BY timestamp DESC LIMIT ?
+      ) sub ORDER BY timestamp ASC`,
+    )
+    .all(conversationId, limit) as PWAMessageRow[];
+}
+
+// --- Push Subscriptions CRUD ---
+
+export function savePushSubscription(
+  endpoint: string,
+  p256dh: string,
+  auth: string,
+  deviceToken?: string,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO pwa_push_subscriptions (endpoint, keys_p256dh, keys_auth, device_token, created_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(endpoint) DO UPDATE SET keys_p256dh = excluded.keys_p256dh, keys_auth = excluded.keys_auth, device_token = excluded.device_token`,
+  ).run(endpoint, p256dh, auth, deviceToken || null, now);
+}
+
+export function removePushSubscription(endpoint: string): boolean {
+  const result = db
+    .prepare(`DELETE FROM pwa_push_subscriptions WHERE endpoint = ?`)
+    .run(endpoint);
+  return result.changes > 0;
+}
+
+export function getAllPushSubscriptions(): PushSubscriptionRow[] {
+  return db
+    .prepare(`SELECT * FROM pwa_push_subscriptions`)
+    .all() as PushSubscriptionRow[];
+}
+
+// --- PWA ID generation helpers ---
+
+export function generatePWAConversationId(): string {
+  return `pwa-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+}
+
+export function generatePWAMessageId(): string {
+  return `msg-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
 }

@@ -1,0 +1,36 @@
+.conversation-list__empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.conversation-item {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.conversation-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.conversation-item--active {
+  background: var(--bg-tertiary);
+  border-left: 3px solid var(--accent);
+}
+
+.conversation-item__name {
+  font-size: 1rem;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-item__time {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}

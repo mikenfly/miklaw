@@ -21,6 +21,7 @@ import { RegisteredGroup } from './types.js';
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+const STATUS_PREFIX = '---NANOCLAW_STATUS---';
 
 function getHomeDir(): string {
   const home = process.env.HOME || os.homedir();
@@ -196,6 +197,7 @@ function buildContainerArgs(mounts: VolumeMount[], containerName: string): strin
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
+  onStatus?: (status: string) => void,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
@@ -246,6 +248,7 @@ export async function runContainerAgent(
     let stderr = '';
     let stdoutTruncated = false;
     let stderrTruncated = false;
+    let stdoutLineBuffer = '';
 
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
@@ -253,6 +256,24 @@ export async function runContainerAgent(
     container.stdout.on('data', (data) => {
       if (stdoutTruncated) return;
       const chunk = data.toString();
+
+      // Line-by-line parsing for STATUS_PREFIX
+      if (onStatus) {
+        stdoutLineBuffer += chunk;
+        const lines = stdoutLineBuffer.split('\n');
+        // Keep the last incomplete line in the buffer
+        stdoutLineBuffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith(STATUS_PREFIX)) {
+            const statusText = line.slice(STATUS_PREFIX.length).trim();
+            if (statusText) {
+              onStatus(statusText);
+            }
+            continue; // Don't add status lines to stdout
+          }
+        }
+      }
+
       const remaining = CONTAINER_MAX_OUTPUT_SIZE - stdout.length;
       if (chunk.length > remaining) {
         stdout += chunk.slice(0, remaining);

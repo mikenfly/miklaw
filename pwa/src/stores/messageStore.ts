@@ -1,0 +1,116 @@
+import { create } from 'zustand';
+import { api } from '../services/api';
+import type { Message, PendingMessage } from '../types/conversation';
+import type { MessagesResponse, SendMessageResponse } from '../types/api';
+import type { WsMessageData } from '../types/websocket';
+
+interface MessageState {
+  messages: Record<string, Message[]>;
+  pendingMessages: Record<string, PendingMessage[]>;
+  isLoading: Record<string, boolean>;
+  fetchMessages: (conversationId: string, since?: string) => Promise<void>;
+  sendMessage: (conversationId: string, content: string) => Promise<void>;
+  handleIncomingMessage: (data: WsMessageData) => void;
+}
+
+export const useMessageStore = create<MessageState>((set) => ({
+  messages: {},
+  pendingMessages: {},
+  isLoading: {},
+
+  fetchMessages: async (conversationId: string, since?: string) => {
+    set((state) => ({
+      isLoading: { ...state.isLoading, [conversationId]: true },
+    }));
+    try {
+      const query = since ? `?since=${encodeURIComponent(since)}` : '';
+      const { messages } = await api.get<MessagesResponse>(
+        `/api/conversations/${conversationId}/messages${query}`,
+      );
+      set((state) => {
+        const existing = since ? (state.messages[conversationId] ?? []) : [];
+        const existingIds = new Set(existing.map((m) => m.id));
+        const newMessages = messages.filter((m) => !existingIds.has(m.id));
+        return {
+          messages: {
+            ...state.messages,
+            [conversationId]: [...existing, ...newMessages],
+          },
+          isLoading: { ...state.isLoading, [conversationId]: false },
+        };
+      });
+    } catch {
+      set((state) => ({
+        isLoading: { ...state.isLoading, [conversationId]: false },
+      }));
+    }
+  },
+
+  sendMessage: async (conversationId: string, content: string) => {
+    const tempId = `temp-${Date.now()}`;
+    const pending: PendingMessage = {
+      tempId,
+      conversationId,
+      content,
+      timestamp: new Date().toISOString(),
+      status: 'sending',
+    };
+
+    set((state) => ({
+      pendingMessages: {
+        ...state.pendingMessages,
+        [conversationId]: [
+          ...(state.pendingMessages[conversationId] ?? []),
+          pending,
+        ],
+      },
+    }));
+
+    try {
+      await api.post<SendMessageResponse>(
+        `/api/conversations/${conversationId}/messages`,
+        { content },
+      );
+      // Remove the pending message on success - the real message
+      // will arrive via WebSocket
+      set((state) => ({
+        pendingMessages: {
+          ...state.pendingMessages,
+          [conversationId]: (state.pendingMessages[conversationId] ?? []).filter(
+            (p) => p.tempId !== tempId,
+          ),
+        },
+      }));
+    } catch {
+      set((state) => ({
+        pendingMessages: {
+          ...state.pendingMessages,
+          [conversationId]: (state.pendingMessages[conversationId] ?? []).map(
+            (p) => (p.tempId === tempId ? { ...p, status: 'failed' as const } : p),
+          ),
+        },
+      }));
+    }
+  },
+
+  handleIncomingMessage: (data: WsMessageData) => {
+    const message: Message = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      chat_jid: data.chat_jid,
+      sender_name: data.sender_name,
+      content: data.content,
+      timestamp: data.timestamp,
+      is_from_me: false,
+    };
+
+    set((state) => {
+      const existing = state.messages[data.chat_jid] ?? [];
+      return {
+        messages: {
+          ...state.messages,
+          [data.chat_jid]: [...existing, message],
+        },
+      };
+    });
+  },
+}));
