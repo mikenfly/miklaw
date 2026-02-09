@@ -46,10 +46,11 @@ export default function LoginPage() {
   // Auto-submit from QR code URL param
   useEffect(() => {
     const urlToken = searchParams.get('token');
-    if (urlToken) {
+    if (urlToken && !isSubmitting) {
       handleSubmit(urlToken);
     }
-  }, [searchParams, handleSubmit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   return (
     <div className="login-page">
