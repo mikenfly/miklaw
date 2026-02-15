@@ -57,8 +57,8 @@ function writeOutput(output: ContainerOutput): void {
 
 function emitStatus(text: string): void {
   const payload = JSON.stringify({ status: text, timestamp: new Date().toISOString() });
-  // Write directly and flush — console.log buffers when stdout is piped
-  process.stdout.write(`${STATUS_PREFIX}${payload}\n`);
+  // Write to stderr — it's unbuffered even when piped, unlike stdout which fully buffers in Docker
+  process.stderr.write(`${STATUS_PREFIX}${payload}\n`);
 }
 
 function craftToolStatus(toolName: string, input: Record<string, any>): string {

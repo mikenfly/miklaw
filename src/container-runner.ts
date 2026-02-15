@@ -248,7 +248,7 @@ export async function runContainerAgent(
     let stderr = '';
     let stdoutTruncated = false;
     let stderrTruncated = false;
-    let stdoutLineBuffer = '';
+    let stderrLineBuffer = '';
 
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
@@ -256,31 +256,6 @@ export async function runContainerAgent(
     container.stdout.on('data', (data) => {
       if (stdoutTruncated) return;
       const chunk = data.toString();
-
-      // Line-by-line parsing for STATUS_PREFIX
-      if (onStatus) {
-        stdoutLineBuffer += chunk;
-        const lines = stdoutLineBuffer.split('\n');
-        // Keep the last incomplete line in the buffer
-        stdoutLineBuffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith(STATUS_PREFIX)) {
-            const statusText = line.slice(STATUS_PREFIX.length).trim();
-            if (statusText) {
-              let status: string;
-              try {
-                const parsed = JSON.parse(statusText);
-                status = parsed.status || statusText;
-              } catch {
-                status = statusText;
-              }
-              logger.debug({ status }, 'Agent status received');
-              onStatus(status);
-            }
-            continue; // Don't add status lines to stdout
-          }
-        }
-      }
 
       const remaining = CONTAINER_MAX_OUTPUT_SIZE - stdout.length;
       if (chunk.length > remaining) {
@@ -297,10 +272,31 @@ export async function runContainerAgent(
 
     container.stderr.on('data', (data) => {
       const chunk = data.toString();
-      const lines = chunk.trim().split('\n');
+
+      // Line-by-line parsing for STATUS_PREFIX (status lines are on stderr for instant delivery)
+      stderrLineBuffer += chunk;
+      const lines = stderrLineBuffer.split('\n');
+      // Keep the last incomplete line in the buffer
+      stderrLineBuffer = lines.pop() || '';
       for (const line of lines) {
+        if (line.startsWith(STATUS_PREFIX)) {
+          const statusText = line.slice(STATUS_PREFIX.length).trim();
+          if (statusText && onStatus) {
+            let status: string;
+            try {
+              const parsed = JSON.parse(statusText);
+              status = parsed.status || statusText;
+            } catch {
+              status = statusText;
+            }
+            logger.debug({ status }, 'Agent status received');
+            onStatus(status);
+          }
+          continue; // Don't add status lines to stderr log
+        }
         if (line) logger.debug({ container: group.folder }, line);
       }
+
       if (stderrTruncated) return;
       const remaining = CONTAINER_MAX_OUTPUT_SIZE - stderr.length;
       if (chunk.length > remaining) {
