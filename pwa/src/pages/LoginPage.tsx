@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { ApiRequestError } from '../services/api';
 import './LoginPage.css';
@@ -9,10 +9,9 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const login = useAuthStore((s) => s.login);
+  const loginWithPermanentToken = useAuthStore((s) => s.loginWithPermanentToken);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const location = useLocation();
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -20,41 +19,38 @@ export default function LoginPage() {
     }
   }, [isAuthenticated, navigate]);
 
-  const handleSubmit = useCallback(
-    async (token: string) => {
-      if (!token.trim() || isSubmitting) return;
-      setIsSubmitting(true);
-      setError('');
+  const handleSubmit = async (token: string) => {
+    if (!token.trim() || isSubmitting) return;
+    setIsSubmitting(true);
+    setError('');
+    try {
+      // Try permanent token first, then temporary
       try {
-        const deviceName = navigator.userAgent.slice(0, 50);
-        const success = await login(token.trim(), deviceName);
-        if (success) {
+        const ok = await loginWithPermanentToken(token.trim());
+        if (ok) {
           navigate('/', { replace: true });
+          return;
         }
-      } catch (err) {
-        if (err instanceof ApiRequestError) {
-          setError(err.message);
-        } else {
-          setError('Erreur de connexion');
-        }
-      } finally {
-        setIsSubmitting(false);
+      } catch {
+        // Fall back to temporary token exchange
       }
-    },
-    [login, navigate, isSubmitting],
-  );
-
-  // Auto-submit from QR code token (URL param or location state)
-  useEffect(() => {
-    const urlToken = searchParams.get('token');
-    const stateToken = (location.state as { token?: string })?.token;
-    const token = urlToken || stateToken;
-
-    if (token && !isSubmitting) {
-      handleSubmit(token);
+      const deviceName = navigator.userAgent.slice(0, 50);
+      const success = await login(token.trim(), deviceName);
+      if (success) {
+        navigate('/', { replace: true });
+      } else {
+        setError('Token invalide ou expiré');
+      }
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        setError(err.message);
+      } else {
+        setError('Erreur de connexion');
+      }
+    } finally {
+      setIsSubmitting(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, location.state]);
+  };
 
   return (
     <div className="login-page">

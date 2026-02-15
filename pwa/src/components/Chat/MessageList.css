@@ -1,17 +1,18 @@
 .message-list {
   flex: 1;
   overflow-y: auto;
-  padding: 1rem;
+  padding: 1.25rem 1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.25rem;
   position: relative;
 }
 
 .message-list__loading {
   text-align: center;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   padding: 2rem;
+  font-size: 0.85rem;
 }
 
 .message-list__new-badge {
@@ -19,17 +20,18 @@
   bottom: 0.5rem;
   align-self: center;
   background: var(--accent);
-  color: var(--bg-primary);
+  color: #fff;
   border: none;
-  border-radius: 1rem;
-  padding: 0.4rem 1rem;
-  font-size: 0.8rem;
-  font-weight: 600;
+  border-radius: var(--radius-lg);
+  padding: 0.35rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 500;
   cursor: pointer;
-  box-shadow: 0 2px 8px var(--shadow);
-  transition: background var(--transition-fast);
+  box-shadow: 0 4px 16px var(--accent-glow);
+  transition: all var(--transition-fast);
 }
 
 .message-list__new-badge:hover {
   background: var(--accent-hover);
+  transform: translateY(-1px);
 }

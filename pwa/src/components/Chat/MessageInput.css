@@ -1,5 +1,5 @@
 .message-input-container {
-  padding: 1rem;
+  padding: 0.75rem 1rem 1rem;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -9,49 +9,58 @@
   display: flex;
   gap: 0.5rem;
   align-items: flex-end;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.25rem 0.25rem 0.25rem 0.75rem;
+  transition: border-color var(--transition-fast);
+}
+
+.message-input-wrapper:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
 .message-input {
   flex: 1;
-  padding: 0.75rem;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  padding: 0.5rem 0;
+  background: transparent;
+  border: none;
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: 0.92rem;
   font-family: inherit;
   resize: none;
   max-height: 150px;
   line-height: 1.5;
   outline: none;
-  transition: border-color var(--transition-fast);
 }
 
-.message-input:focus {
-  border-color: var(--accent);
+.message-input::placeholder {
+  color: var(--text-tertiary);
 }
 
 .message-input__send {
-  width: 48px;
-  height: 48px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   background: var(--accent);
   border: none;
-  border-radius: 50%;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   cursor: pointer;
-  color: var(--bg-primary);
-  transition: background var(--transition-fast);
+  color: #fff;
+  transition: all var(--transition-fast);
 }
 
 .message-input__send:not(:disabled):hover {
   background: var(--accent-hover);
+  box-shadow: 0 0 12px var(--accent-glow);
 }
 
 .message-input__send:disabled {
-  opacity: 0.5;
+  opacity: 0.3;
   cursor: not-allowed;
 }

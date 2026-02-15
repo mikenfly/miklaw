@@ -7,7 +7,7 @@ interface AuthState {
   token: string | null;
   isAuthenticated: boolean;
   login: (tempToken: string, deviceName: string) => Promise<boolean>;
-  loginWithPermanentToken: (token: string) => void;
+  loginWithPermanentToken: (token: string) => Promise<boolean>;
   logout: () => void;
   initialize: () => void;
 }
@@ -33,9 +33,21 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
-  loginWithPermanentToken: (token: string) => {
+  loginWithPermanentToken: async (token: string) => {
+    // Validate token by making a test API call
     setToken(token);
-    set({ token, isAuthenticated: true });
+    try {
+      await api.get('/api/conversations');
+      set({ token, isAuthenticated: true });
+      return true;
+    } catch (error) {
+      clearToken();
+      set({ token: null, isAuthenticated: false });
+      if (error instanceof ApiRequestError) {
+        throw error;
+      }
+      return false;
+    }
   },
 
   logout: () => {

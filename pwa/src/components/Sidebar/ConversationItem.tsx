@@ -39,6 +39,12 @@ export default function ConversationItem({ conversation }: ConversationItemProps
     setContextMenu({ x: e.clientX, y: e.clientY });
   }, []);
 
+  const handleMoreClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setContextMenu({ x: rect.right, y: rect.bottom });
+  }, []);
+
   const isActive = activeId === conversation.jid;
 
   return (
@@ -48,7 +54,16 @@ export default function ConversationItem({ conversation }: ConversationItemProps
         onClick={handleClick}
         onContextMenu={handleContextMenu}
       >
-        <h4 className="conversation-item__name">{conversation.name}</h4>
+        <div className="conversation-item__row">
+          <h4 className="conversation-item__name">{conversation.name}</h4>
+          <button
+            className="conversation-item__more"
+            onClick={handleMoreClick}
+            aria-label="Options"
+          >
+            &#x22EF;
+          </button>
+        </div>
         <p className="conversation-item__time">{formatRelativeTime(conversation.lastActivity)}</p>
       </div>
       {contextMenu && (

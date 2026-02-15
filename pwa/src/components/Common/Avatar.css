@@ -1,20 +1,21 @@
 .avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   font-weight: 600;
-  font-size: 0.9rem;
-  color: var(--text-primary);
+  font-size: 0.75rem;
+  color: #fff;
+  letter-spacing: -0.02em;
 }
 
 .avatar--user {
-  background: var(--message-user);
+  background: linear-gradient(135deg, var(--accent), #a78bfa);
 }
 
 .avatar--assistant {
-  background: var(--accent);
+  background: linear-gradient(135deg, #34d399, #06b6d4);
 }

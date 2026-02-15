@@ -100,7 +100,7 @@ export async function sendToPWAAgent(
   userMessage: string,
   assistantName: string,
   onStatus?: OnStatusCallback,
-): Promise<{ response: string; messageId: string }> {
+): Promise<{ response: string; messageId: string; renamedTo?: string }> {
   const conversation = getPWAConversationDB(conversationId);
   if (!conversation) {
     throw new Error('Conversation not found');
@@ -109,6 +109,17 @@ export async function sendToPWAAgent(
   // Store the user message
   const userMsgId = generatePWAMessageId();
   addPWAMessage(userMsgId, conversationId, 'user', userMessage);
+
+  // Auto-rename if still default name and this is the first user message
+  let renamedTo: string | undefined;
+  if (conversation.name === 'New conversation') {
+    const msgCount = getPWARecentMessages(conversationId, 2).filter(m => m.sender === 'user').length;
+    if (msgCount === 1) {
+      const newName = userMessage.length > 40 ? userMessage.slice(0, 37) + '...' : userMessage;
+      renamePWAConversationDB(conversationId, newName);
+      renamedTo = newName;
+    }
+  }
 
   // Build context for the agent (last 10 messages)
   const recentMessages = getPWARecentMessages(conversationId, 10);
@@ -169,7 +180,7 @@ export async function sendToPWAAgent(
     const assistantMsgId = generatePWAMessageId();
     addPWAMessage(assistantMsgId, conversationId, 'assistant', response);
 
-    return { response, messageId: assistantMsgId };
+    return { response, messageId: assistantMsgId, renamedTo };
   } catch (err) {
     logger.error({ conversationId, err }, 'Failed to call PWA agent');
     throw err;

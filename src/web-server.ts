@@ -76,16 +76,23 @@ export function startWebServer(
     res.json({ status: 'ok' });
   });
 
-  // Login endpoint - exchanges temporary token for permanent token
+  // Login endpoint - exchanges temporary token for permanent token,
+  // or accepts an existing permanent token directly
   app.post('/api/login', (req, res) => {
-    const { token: tempToken, deviceName } = req.body;
+    const { token: inputToken, deviceName } = req.body;
 
-    if (!tempToken) {
+    if (!inputToken) {
       return res.status(400).json({ error: 'Token required' });
     }
 
+    // If the token is already a valid permanent token, return it directly
+    if (verifyToken(inputToken)) {
+      return res.json({ token: inputToken });
+    }
+
+    // Otherwise try to exchange as temporary token
     const permanentToken = exchangeTemporaryToken(
-      tempToken,
+      inputToken,
       deviceName || 'Unknown Device',
     );
 
@@ -208,16 +215,8 @@ export function startWebServer(
 
           const userMsgId = generatePWAMessageId();
 
-          // Broadcast user message to all clients
-          broadcastToClients({
-            type: 'message',
-            data: {
-              chat_jid: id,
-              sender_name: 'You',
-              content,
-              timestamp: new Date().toISOString(),
-            },
-          });
+          // Don't broadcast user message - the sending client already has it
+          // as a pending message. Other clients will see it on next fetch.
 
           // Return immediately, agent response arrives via WebSocket
           res.json({ success: true, messageId: userMsgId });
@@ -238,7 +237,13 @@ export function startWebServer(
               });
             },
           )
-            .then(({ response, messageId }) => {
+            .then(({ response, messageId, renamedTo }) => {
+              if (renamedTo) {
+                broadcastToClients({
+                  type: 'conversation_renamed',
+                  data: { jid: id, name: renamedTo },
+                });
+              }
               broadcastToClients({
                 type: 'message',
                 data: {
@@ -481,18 +486,22 @@ export function startWebServer(
   });
 
   // SPA fallback - serve index.html for non-API, non-WS routes
+  // No-cache on index.html to always serve latest build
   app.get('*', (_req, res) => {
     const indexPath = path.join(pwaDistDir, 'index.html');
     if (fs.existsSync(indexPath)) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(indexPath);
     } else {
       res.status(404).json({ error: 'Not found' });
     }
   });
 
-  server.listen(port, () => {
+  server.listen(port, '0.0.0.0', () => {
     logger.info({ port }, 'Web server started');
-    console.log(`\nPWA Web Interface: http://localhost:${port}\n`);
+    console.log(`\nPWA Web Interface: http://0.0.0.0:${port}\n`);
   });
 
   return server;

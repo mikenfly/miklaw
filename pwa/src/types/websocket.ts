@@ -3,6 +3,7 @@ export interface WsMessageData {
   sender_name: string;
   content: string;
   timestamp: string;
+  is_from_me?: boolean;
 }
 
 export interface AgentStatusData {

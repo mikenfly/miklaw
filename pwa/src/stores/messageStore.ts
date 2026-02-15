@@ -71,16 +71,30 @@ export const useMessageStore = create<MessageState>((set) => ({
         `/api/conversations/${conversationId}/messages`,
         { content },
       );
-      // Remove the pending message on success - the real message
-      // will arrive via WebSocket
-      set((state) => ({
-        pendingMessages: {
-          ...state.pendingMessages,
-          [conversationId]: (state.pendingMessages[conversationId] ?? []).filter(
-            (p) => p.tempId !== tempId,
-          ),
-        },
-      }));
+      // Move pending message to confirmed messages
+      set((state) => {
+        const confirmedMsg: Message = {
+          id: tempId,
+          chat_jid: conversationId,
+          sender_name: 'Vous',
+          content,
+          timestamp: pending.timestamp,
+          is_from_me: true,
+        };
+        const existing = state.messages[conversationId] ?? [];
+        return {
+          messages: {
+            ...state.messages,
+            [conversationId]: [...existing, confirmedMsg],
+          },
+          pendingMessages: {
+            ...state.pendingMessages,
+            [conversationId]: (state.pendingMessages[conversationId] ?? []).filter(
+              (p) => p.tempId !== tempId,
+            ),
+          },
+        };
+      });
     } catch {
       set((state) => ({
         pendingMessages: {
@@ -94,16 +108,20 @@ export const useMessageStore = create<MessageState>((set) => ({
   },
 
   handleIncomingMessage: (data: WsMessageData) => {
+    const isFromMe = data.is_from_me ?? false;
     const message: Message = {
       id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       chat_jid: data.chat_jid,
       sender_name: data.sender_name,
       content: data.content,
       timestamp: data.timestamp,
-      is_from_me: false,
+      is_from_me: isFromMe,
     };
 
     set((state) => {
+      // Skip if this is a self-sent message (already handled by sendMessage)
+      if (isFromMe) return state;
+
       const existing = state.messages[data.chat_jid] ?? [];
       return {
         messages: {
