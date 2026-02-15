@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { getToken } from '../../services/auth';
 import FilePreviewModal from '../FilePreview/FilePreviewModal';
 import './MessageContent.css';
 
@@ -25,12 +26,47 @@ function isMediaLink(href: string): FileType | null {
   return type !== 'other' ? type : null;
 }
 
-export default function MessageContent({ content }: MessageContentProps) {
+/**
+ * Rewrite container workspace paths to the files API endpoint.
+ * Agent writes paths like /workspace/group/photo.jpg — these need to become
+ * /api/conversations/{id}/files/photo.jpg?token=xxx
+ */
+function rewriteUrl(src: string, conversationId: string, token: string | null): string {
+  // Already an API URL or external URL — leave as-is
+  if (src.startsWith('/api/') || src.startsWith('http://') || src.startsWith('https://')) {
+    return src;
+  }
+
+  let relativePath: string;
+
+  if (src.startsWith('/workspace/group/')) {
+    relativePath = src.slice('/workspace/group/'.length);
+  } else if (src.startsWith('./')) {
+    relativePath = src.slice(2);
+  } else if (!src.startsWith('/')) {
+    // Relative path like "photo.jpg"
+    relativePath = src;
+  } else {
+    // Other absolute paths (e.g. /workspace/global/) — can't serve these
+    return src;
+  }
+
+  const apiUrl = `/api/conversations/${conversationId}/files/${relativePath}`;
+  return token ? `${apiUrl}?token=${encodeURIComponent(token)}` : apiUrl;
+}
+
+export default function MessageContent({ content, conversationId }: MessageContentProps) {
   const [modal, setModal] = useState<{ url: string; filename: string; fileType: FileType } | null>(null);
+  const token = useMemo(() => getToken(), []);
 
   const openModal = useCallback((url: string, filename: string, fileType: FileType) => {
     setModal({ url, filename, fileType });
   }, []);
+
+  const rewrite = useCallback(
+    (src: string) => rewriteUrl(src, conversationId, token),
+    [conversationId, token],
+  );
 
   return (
     <>
@@ -39,13 +75,14 @@ export default function MessageContent({ content }: MessageContentProps) {
         components={{
           img: ({ src, alt }) => {
             if (!src) return null;
+            const url = rewrite(src);
             const filename = alt || src.split('/').pop() || 'image';
             return (
               <span
                 className="mc-media mc-media--image"
-                onClick={() => openModal(src, filename, 'image')}
+                onClick={() => openModal(url, filename, 'image')}
               >
-                <img src={src} alt={alt || ''} loading="lazy" className="mc-image" />
+                <img src={url} alt={alt || ''} loading="lazy" className="mc-image" />
               </span>
             );
           },
@@ -54,25 +91,26 @@ export default function MessageContent({ content }: MessageContentProps) {
             const mediaType = isMediaLink(href);
             if (!mediaType) return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
 
+            const url = rewrite(href);
             const filename = String(children) || href.split('/').pop() || 'file';
             if (mediaType === 'video') {
               return (
-                <span className="mc-media mc-media--video" onClick={() => openModal(href, filename, 'video')}>
-                  <video src={href} controls className="mc-video" />
+                <span className="mc-media mc-media--video" onClick={() => openModal(url, filename, 'video')}>
+                  <video src={url} controls className="mc-video" />
                 </span>
               );
             }
             if (mediaType === 'audio') {
               return (
                 <span className="mc-media mc-media--audio">
-                  <audio src={href} controls className="mc-audio" />
+                  <audio src={url} controls className="mc-audio" />
                   <span className="mc-audio__name">{filename}</span>
                 </span>
               );
             }
             if (mediaType === 'pdf') {
               return (
-                <span className="mc-media mc-media--pdf" onClick={() => openModal(href, filename, 'pdf')}>
+                <span className="mc-media mc-media--pdf" onClick={() => openModal(url, filename, 'pdf')}>
                   <span className="mc-pdf-badge">PDF</span>
                   <span className="mc-pdf-name">{filename}</span>
                 </span>
@@ -80,8 +118,8 @@ export default function MessageContent({ content }: MessageContentProps) {
             }
             // image link
             return (
-              <span className="mc-media mc-media--image" onClick={() => openModal(href, filename, 'image')}>
-                <img src={href} alt={filename} loading="lazy" className="mc-image" />
+              <span className="mc-media mc-media--image" onClick={() => openModal(url, filename, 'image')}>
+                <img src={url} alt={filename} loading="lazy" className="mc-image" />
               </span>
             );
           },

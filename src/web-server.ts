@@ -357,10 +357,18 @@ export function startWebServer(
     },
   );
 
-  // Get file from conversation
+  // Get file from conversation (supports ?token= query param for <img src> usage)
   app.get(
     '/api/conversations/:id/files/*',
-    authMiddleware,
+    (req: AuthRequest, res, next) => {
+      // Accept token from query param (for inline <img>, <video>, <audio> src)
+      const queryToken = req.query.token as string | undefined;
+      if (queryToken && verifyToken(queryToken)) {
+        req.token = queryToken;
+        return next();
+      }
+      return authMiddleware(req, res, next);
+    },
     (req: AuthRequest, res) => {
       const { id } = req.params;
       const filepath = (req.params as any)[0] as string;
@@ -497,6 +505,14 @@ export function startWebServer(
     } else {
       res.status(404).json({ error: 'Not found' });
     }
+  });
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.error({ port }, `Port ${port} already in use — kill the old process or change PWA_PORT`);
+      process.exit(1);
+    }
+    throw err;
   });
 
   server.listen(port, '0.0.0.0', () => {
