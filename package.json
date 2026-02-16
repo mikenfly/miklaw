@@ -13,7 +13,8 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "build:pwa": "cd pwa && npm run build",
-    "dev:pwa": "cd pwa && npm run dev"
+    "dev:pwa": "cd pwa && npm run dev",
+    "dev:all": "npm run dev & npm run dev:pwa"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.9",

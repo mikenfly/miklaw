@@ -123,6 +123,9 @@ export default function MessageContent({ content, conversationId }: MessageConte
               </span>
             );
           },
+          blockquote: ({ children }) => (
+            <blockquote className="mc-blockquote">{children}</blockquote>
+          ),
           table: ({ children }) => (
             <div className="mc-table-wrap">
               <table className="mc-table">{children}</table>

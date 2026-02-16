@@ -13,9 +13,12 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 | `src/index.ts` | Main app: WhatsApp connection, message routing, IPC |
 | `src/config.ts` | Trigger pattern, paths, intervals |
 | `src/container-runner.ts` | Spawns agent containers with mounts |
+| `src/web-server.ts` | Express API + WebSocket + sert le frontend PWA |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
+| `pwa/src/` | Frontend React (Vite + Zustand + React 19) |
+| `container/agent-runner/` | Code exécuté dans les containers Docker |
 
 ## Skills
 
@@ -50,9 +53,18 @@ On peut orchestrer des builds complexes avec une équipe d'agents Claude Code co
 Run commands directly—don't tell the user to run them.
 
 ```bash
-npm run dev          # Run with hot reload
-npm run build        # Compile TypeScript
-./container/build.sh # Rebuild agent container
+# Dev (backend + frontend hot reload)
+npm run dev:all      # Lance backend (:17284) + Vite (:5173) ensemble
+npm run dev          # Backend seul (tsx hot reload)
+npm run dev:pwa      # Frontend seul (Vite hot reload)
+
+# En dev, utiliser http://localhost:5173 — Vite proxy /api et /ws vers :17284
+# Le port :17284 sert pwa/dist/ (version compilée, pour la prod)
+
+# Build
+npm run build        # Compile TypeScript backend
+npm run build:pwa    # Build frontend (pwa/dist/)
+./container/build.sh # Rebuild agent container image
 ```
 
 Service management:

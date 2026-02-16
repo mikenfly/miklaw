@@ -106,3 +106,30 @@
 .mc-table tr:hover td {
   background: var(--bg-secondary);
 }
+
+/* Blockquote */
+.mc-blockquote {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--accent);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-secondary);
+}
+
+.mc-blockquote p {
+  margin: 0.25rem 0;
+}
+
+.mc-blockquote p:first-child {
+  margin-top: 0;
+}
+
+.mc-blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* Nested blockquotes */
+.mc-blockquote .mc-blockquote {
+  margin: 0.25rem 0;
+}
