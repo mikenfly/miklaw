@@ -54,12 +54,12 @@ Run commands directly—don't tell the user to run them.
 
 ```bash
 # Dev (backend + frontend hot reload)
-npm run dev:all      # Lance backend (:17284) + Vite (:5173) ensemble
-npm run dev          # Backend seul (tsx hot reload)
-npm run dev:pwa      # Frontend seul (Vite hot reload)
+npm run dev:all      # Lance backend + Vite ensemble
+npm run dev          # Backend seul (tsx watch hot reload)
+npm run dev:pwa      # Frontend seul (Vite hot reload, HTTPS)
 
-# En dev, utiliser http://localhost:5173 — Vite proxy /api et /ws vers :17284
-# Le port :17284 sert pwa/dist/ (version compilée, pour la prod)
+# Les ports sont configurés dans .env (WEB_PORT) et pwa/vite.config.ts
+# Vite proxy /api et /ws vers le backend automatiquement
 
 # Build
 npm run build        # Compile TypeScript backend
@@ -67,7 +67,32 @@ npm run build:pwa    # Build frontend (pwa/dist/)
 ./container/build.sh # Rebuild agent container image
 ```
 
-Service management:
+### Authentication en dev
+
+Un `DEV_TOKEN` stable est défini dans `.env`. Il ne expire jamais et évite de devoir re-générer un token à chaque relance. URL d'accès direct :
+
+```
+https://localhost:<vite-port>/?token=$DEV_TOKEN
+```
+
+### IMPORTANT : Ne pas relancer le serveur
+
+**Le serveur tourne déjà en arrière-plan via `npm run dev:all`.** Le backend a le hot reload (`tsx watch`) et le frontend aussi (Vite HMR). Quand tu modifies du code, les changements sont appliqués automatiquement.
+
+**NE JAMAIS faire :**
+- `npm run dev` / `npm run dev:all` / `npm start` → le serveur tourne déjà
+- `npx tsx src/index.ts` → crée un conflit de port
+- Tuer/relancer le process pour "tester" → le hot reload suffit
+
+**Si tu dois vérifier que le serveur tourne :**
+```bash
+ss -tlnp | grep $WEB_PORT   # Vérifie que le port est écouté
+curl -s http://localhost:$WEB_PORT/api/health | head -1  # Health check
+```
+
+**Si le serveur ne tourne pas** (et seulement dans ce cas), l'utilisateur le lancera lui-même.
+
+Service management (production) :
 ```bash
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist

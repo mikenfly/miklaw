@@ -196,7 +196,13 @@ export function verifyPermanentToken(token: string): boolean {
  * Used by middleware for backward compatibility
  */
 export function verifyToken(token: string): boolean {
-  // Check permanent tokens first (most common case)
+  // Check DEV_TOKEN from .env first (stable dev access, never expires)
+  const devToken = process.env.DEV_TOKEN;
+  if (devToken && token === devToken) {
+    return true;
+  }
+
+  // Check permanent tokens (most common case)
   if (verifyPermanentToken(token)) {
     return true;
   }
