@@ -23,6 +23,7 @@ export function useWebSocket(): void {
         case 'message':
           useMessageStore.getState().handleIncomingMessage(msg.data);
           useAgentStatusStore.getState().clearStatus(msg.data.chat_jid);
+          useConversationStore.getState().bumpConversation(msg.data.chat_jid);
           break;
         case 'agent_status':
           useAgentStatusStore.getState().handleAgentStatus(

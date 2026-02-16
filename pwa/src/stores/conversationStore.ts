@@ -12,6 +12,8 @@ interface ConversationState {
   renameConversation: (id: string, name: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   setActive: (id: string) => void;
+  /** Move a conversation to the top (new message received) */
+  bumpConversation: (id: string) => void;
   handleConversationCreated: (conv: Conversation) => void;
   handleConversationRenamed: (id: string, name: string) => void;
   handleConversationDeleted: (id: string) => void;
@@ -60,6 +62,17 @@ export const useConversationStore = create<ConversationState>((set) => ({
 
   setActive: (id: string) => {
     set({ activeId: id });
+  },
+
+  bumpConversation: (id: string) => {
+    set((state) => {
+      const idx = state.conversations.findIndex((c) => c.jid === id);
+      if (idx <= 0) return state; // already first or not found
+      const conv = state.conversations[idx]!;
+      const updated = { ...conv, lastActivity: new Date().toISOString() };
+      const rest = state.conversations.filter((_, i) => i !== idx);
+      return { conversations: [updated, ...rest] };
+    });
   },
 
   handleConversationCreated: (conv: Conversation) => {
