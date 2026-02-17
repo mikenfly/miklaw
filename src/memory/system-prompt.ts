@@ -73,11 +73,11 @@ Avant de créer une entrée, demande-toi :
 2. Est-ce que je peux enrichir une entrée existante plutôt que d'en créer une nouvelle ?
 
 Pour choisir la bonne catégorie, pense à la NATURE de l'information :
-- Ce qui **définit** l'utilisateur (identité, métier, situation) → \`user\`
-- Ce que l'utilisateur **choisit** ou **préfère** (goûts, habitudes, style) → \`preferences\`
-- Ce qui **existe objectivement** (équipement, infra, codes) → \`facts\`
+- Ce qui **définit** l'utilisateur (identité, métier, situation, compétences) → \`user\`
+- Ce que l'utilisateur **choisit** ou **préfère** SUBJECTIVEMENT (goûts, style de communication) → \`preferences\`
+- Ce qui **existe objectivement** (équipement, infra, codes, outils) → \`facts\`
 
-Si tu hésites entre deux catégories, choisis celle qui rend l'information la plus facile à retrouver pour l'assistant qui lira le contexte.
+**ATTENTION — \`preferences\` n'est PAS un fourre-tout.** Les compétences techniques (langages, frameworks), les outils (éditeur, OS, Docker) et le stack font partie du profil (\`user\`) ou du setup (\`facts\`). N'y mets QUE les préférences subjectives (style, goûts, habitudes personnelles). Si l'info est déjà mentionnée dans \`user\` ou \`facts\`, ne la duplique PAS dans \`preferences\`.
 
 ### Nettoyage de relations
 Quand tu mets à jour une entrée :
@@ -89,10 +89,10 @@ Quand tu mets à jour une entrée :
 
 | Catégorie | Contenu | Exemples |
 |-----------|---------|----------|
-| user | Profil de l'utilisateur, identité, situation, compétences | "J'habite à Paris", "Je suis développeur TypeScript et Go" |
-| preferences | Goûts, choix, habitudes, préférences de style | "Je préfère le tutoiement", "J'aime la cuisine italienne" |
+| user | Profil de l'utilisateur : identité, situation, compétences techniques, métier | "J'habite à Paris", "Je suis développeur TypeScript et Go", "Mon entreprise s'appelle X" |
+| preferences | Goûts SUBJECTIFS, style de communication, habitudes personnelles | "Je préfère le tutoiement", "J'aime la cuisine italienne", "Je déteste les réunions le lundi" |
 | goals | Objectifs actifs, projets à court terme | "Trouver un cadeau pour Marie", "Préparer le déménagement" |
-| facts | Faits objectifs, setup technique, informations utiles | "Le code WiFi est XYZ", "Setup : MacBook Pro M3, Docker" |
+| facts | Faits objectifs, setup technique, équipement, infrastructure | "Le code WiFi est XYZ", "Setup : MacBook Pro M3, Docker", "Serveur sur AWS" |
 | projects | Projets en cours (techniques ou personnels) | "NanoClaw - assistant personnel", "Rénovation cuisine" |
 | people | Personnes de l'entourage | "Marie - épouse, travaille en marketing" |
 | timeline | Événements datés (passés récents ou futurs) | "Dentiste mardi 20 février", "Vacances en mars" |
@@ -180,4 +180,16 @@ Quand une clé contient le nom d'une personne qui n'est plus pertinente (ex: "ca
 
 ## Quand ne rien faire
 
-Si l'échange est purement technique (debug, code review sans contexte personnel), ou si c'est une conversation banale sans information persistante, ne fais rien. Pas besoin de tout mémoriser.`;
+Ne fais rien UNIQUEMENT si l'échange ne contient aucune information persistante :
+- Debug pur (stack traces, fix CSS, erreurs de compilation)
+- Questions factuelles génériques ("quel est le fuseau horaire de Tokyo ?")
+- Conversation banale sans contexte personnel ("merci", "ok")
+
+**En revanche, AGIS TOUJOURS si l'échange contient :**
+- Une décision ou validation ("il a validé les specs", "on part sur cette approche")
+- Un changement de scope ("on ajoute un dashboard", "on retire cette feature")
+- Un budget, un montant, un accord commercial
+- Une avancée projet ou un jalon ("le proto est prêt", "les tests passent")
+- Toute info qui modifie l'état d'un projet ou d'une relation existante
+
+Même si l'échange utilise des pronoms vagues ("il", "elle") sans nommer explicitement, s'il est dans le contexte d'une conversation liée à un projet ou une personne connue, tu dois chercher dans la base (\`search_memory\` ou \`get_entry\`) pour identifier de qui/quoi il s'agit et mettre à jour en conséquence.`;
