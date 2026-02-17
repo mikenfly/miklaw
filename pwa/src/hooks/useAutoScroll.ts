@@ -8,12 +8,22 @@ interface UseAutoScrollResult {
   scrollToBottom: () => void;
 }
 
-export function useAutoScroll(_deps: unknown[]): UseAutoScrollResult {
+/**
+ * Auto-scroll with burst protection.
+ * deps must be [messages.length, pendingMessages.length].
+ *
+ * - Initial load / conversation switch → scroll to bottom, no flag
+ * - User sends a message (pending++) → scroll to bottom, reset flag
+ * - First incoming WebSocket message → auto-scroll, set flag
+ * - Subsequent incoming messages while flag set → badge, no scroll
+ * - User scrolls to bottom or clicks badge → reset flag
+ */
+export function useAutoScroll(deps: unknown[]): UseAutoScrollResult {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [showNewMessageBadge, setShowNewMessageBadge] = useState(false);
   const isNearBottomRef = useRef(true);
-  // After one auto-scroll, block further auto-scrolls until user scrolls to bottom
   const hasAutoScrolledRef = useRef(false);
+  const prevDepsRef = useRef<number[] | null>(null);
 
   const checkNearBottom = useCallback(() => {
     const el = containerRef.current;
@@ -22,7 +32,7 @@ export function useAutoScroll(_deps: unknown[]): UseAutoScrollResult {
     isNearBottomRef.current = distanceFromBottom < BOTTOM_THRESHOLD;
     if (isNearBottomRef.current) {
       setShowNewMessageBadge(false);
-      hasAutoScrolledRef.current = false; // User scrolled to bottom — ready for next auto-scroll
+      hasAutoScrolledRef.current = false;
     }
   }, []);
 
@@ -41,49 +51,64 @@ export function useAutoScroll(_deps: unknown[]): UseAutoScrollResult {
     return () => el.removeEventListener('scroll', checkNearBottom);
   }, [checkNearBottom]);
 
+  const depsKey = JSON.stringify(deps);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    let rafId: number | null = null;
+    const curr = deps as number[];
+    const prev = prevDepsRef.current;
+    prevDepsRef.current = [curr[0] ?? 0, curr[1] ?? 0];
 
-    const observer = new MutationObserver((mutations) => {
-      if (!isNearBottomRef.current) {
-        setShowNewMessageBadge(true);
-        return;
-      }
+    const currMsg = curr[0] ?? 0;
+    const currPending = curr[1] ?? 0;
+    const prevMsg = prev?.[0] ?? 0;
+    const prevPending = prev?.[1] ?? 0;
 
-      const hasNewMessage = mutations.some(
-        (m) => m.type === 'childList' && m.target === el && m.addedNodes.length > 0,
-      );
-
-      if (hasNewMessage && hasAutoScrolledRef.current) {
-        // Already auto-scrolled once — show badge, don't disrupt reading
-        setShowNewMessageBadge(true);
-        return;
-      }
-
-      // Auto-scroll: first new message, or content size change (image/audio load)
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        const container = containerRef.current;
-        if (container) {
-          container.scrollTop = container.scrollHeight;
-          if (hasNewMessage) {
-            hasAutoScrolledRef.current = true;
-          }
-        }
-        rafId = null;
+    const scrollDown = () => {
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
       });
-    });
-
-    observer.observe(el, { childList: true, subtree: true });
-
-    return () => {
-      observer.disconnect();
-      if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, []);
+
+    // First render
+    if (!prev) {
+      scrollDown();
+      return;
+    }
+
+    // Conversation switch (msg count dropped) or initial load (0 → N)
+    if (currMsg < prevMsg || (prevMsg === 0 && currMsg > 0)) {
+      hasAutoScrolledRef.current = false;
+      setShowNewMessageBadge(false);
+      scrollDown();
+      return;
+    }
+
+    // User sent a message (pending count increased)
+    if (currPending > prevPending) {
+      hasAutoScrolledRef.current = false;
+      scrollDown();
+      return;
+    }
+
+    // Pending message confirmed (pending decreased)
+    if (currPending < prevPending) {
+      scrollDown();
+      return;
+    }
+
+    // New incoming message (from WebSocket)
+    if (currMsg > prevMsg) {
+      if (!isNearBottomRef.current || hasAutoScrolledRef.current) {
+        setShowNewMessageBadge(true);
+        return;
+      }
+      scrollDown();
+      hasAutoScrolledRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [depsKey]);
 
   return { containerRef, showNewMessageBadge, scrollToBottom };
 }
