@@ -58,6 +58,11 @@ function cleanTestDb(): void {
     const f = MEMORY_DB_PATH + ext;
     if (fs.existsSync(f)) fs.unlinkSync(f);
   }
+  // Remove session file so agent starts fresh
+  const sessionFile = path.join(MEMORY_DIR, '.session');
+  if (fs.existsSync(sessionFile)) {
+    fs.unlinkSync(sessionFile);
+  }
 }
 
 // ─── Layer 1: Database Operations ──────────────────────────────
@@ -416,6 +421,31 @@ async function testAgent(): Promise<void> {
 
   await waitForProcessing(20000);
   dumpDb('After test 8 — multi-entity');
+
+  // Test 9: Cross-conversation ambiguity (the "il/elle" trap)
+  // Two conversations arrive in the same batch. One talks about a person,
+  // the other uses "elle" without naming anyone. The agent should NOT
+  // cross-contaminate.
+  console.log('\n[Test 9: Cross-conversation ambiguity — batch from 2 conversations]');
+  feedExchange({
+    channel: 'pwa',
+    conversation_name: 'Famille',
+    user_message: 'Ma sœur Léa vient nous rendre visite ce weekend. Elle arrive samedi matin.',
+    assistant_response: 'Super ! Léa arrive samedi matin. Tu veux que je te rappelle de préparer quelque chose ?',
+    timestamp: new Date().toISOString(),
+  });
+  // This exchange is from a DIFFERENT conversation — "elle" here refers to
+  // a code review, not Léa
+  feedExchange({
+    channel: 'pwa',
+    conversation_name: 'Code Review',
+    user_message: 'Elle plante au démarrage, tu peux regarder la stack trace ?',
+    assistant_response: 'Je vois, l\'erreur vient de la connexion à la base de données. Le pool est mal configuré.',
+    timestamp: new Date().toISOString(),
+  });
+
+  await waitForProcessing(20000);
+  dumpDb('After test 9 — check: Léa created, "elle plante" NOT attributed to Léa');
 
   // Final: Generate context and show it
   console.log('\n[Generating final memory-context.md]');
