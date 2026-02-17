@@ -5,7 +5,9 @@ import {
   getEntry,
   upsertEntry,
   bumpMention,
+  deleteEntry,
   searchByEmbedding,
+  hybridSearch,
   getRelations,
   addRelation,
   removeRelation,
@@ -48,7 +50,7 @@ export function createMemoryMcpServer() {
     tools: [
       tool(
         'search_memory',
-        'Search memory entries by semantic similarity. Returns the most relevant entries matching the query.',
+        'Search memory entries using hybrid search (semantic similarity + keyword matching). Returns the most relevant entries. Always use this before creating a new entry to check for duplicates.',
         {
           query: z.string().describe('Search query text'),
           category: z
@@ -66,8 +68,9 @@ export function createMemoryMcpServer() {
         async (args) => {
           try {
             const embedding = await generateEmbedding(args.query);
-            const results = searchByEmbedding(
+            const results = hybridSearch(
               embedding,
+              args.query,
               args.limit || 10,
               args.category as MemoryCategory | undefined,
             );
@@ -86,7 +89,7 @@ export function createMemoryMcpServer() {
             const formatted = results
               .map(
                 (r) =>
-                  `[similarity: ${r.similarity.toFixed(3)}]\n${formatEntry(r)}`,
+                  `[score: ${r.similarity.toFixed(3)}, match: ${r.matchType}]\n${formatEntry(r)}`,
               )
               .join('\n\n---\n\n');
 
@@ -132,6 +135,10 @@ export function createMemoryMcpServer() {
         'upsert_entry',
         `Create a new memory entry or rewrite an existing one. If the key already exists, the content is fully replaced and mention_count is incremented.
 
+After every upsert, the tool automatically searches for related entries (hybrid: semantic + keyword) and shows them in the response. Review these carefully:
+- If a related entry contains the SAME information in a different category → you have a duplicate. Delete one or merge them.
+- If a related entry is AFFECTED by this change → update it too (propagation).
+
 Content style: write a current-state snapshot — what IS true right now, not what happened. 2-5 sentences max. If updating, rewrite entirely so someone understands the situation without history.`,
         {
           category: z.enum(CATEGORIES).describe('Entry category'),
@@ -160,7 +167,15 @@ Content style: write a current-state snapshot — what IS true right now, not wh
         },
         async (args) => {
           try {
-            const embedding = await generateEmbedding(args.content);
+            // Embed with enriched text: [category] key: content
+            const embeddingText = `[${args.category}] ${args.key}: ${args.content}`;
+            const embeddingArray = await generateEmbedding(embeddingText);
+
+            // Search for related entries BEFORE upserting (hybrid: vector + keyword)
+            const related = hybridSearch(embeddingArray, args.content, 5, undefined);
+            const relatedOthers = related.filter((r) => r.key !== args.key);
+
+            // Perform the upsert
             upsertEntry({
               category: args.category as MemoryCategory,
               key: args.key,
@@ -168,15 +183,27 @@ Content style: write a current-state snapshot — what IS true right now, not wh
               status: args.status,
               origin_type: args.origin_type,
               origin_summary: args.origin_summary,
-              embedding: embeddingToBuffer(embedding),
+              embedding: embeddingToBuffer(embeddingArray),
             });
 
             const action = getEntry(args.key)!.mention_count > 1 ? 'Updated' : 'Created';
+
+            // Build related entries feedback
+            let relatedInfo = '';
+            if (relatedOthers.length > 0) {
+              relatedInfo = `\n\nRelated entries in database:\n${relatedOthers
+                .map(
+                  (d) =>
+                    `  - [${d.category}] ${d.key} (score: ${d.similarity.toFixed(3)}, match: ${d.matchType}): ${d.content.slice(0, 120)}...`,
+                )
+                .join('\n')}\nReview: if any of these contain the SAME information, merge them. If any are affected by this change, update them too.`;
+            }
+
             return {
               content: [
                 {
                   type: 'text',
-                  text: `${action} entry "${args.key}" in ${args.category}.`,
+                  text: `${action} entry "${args.key}" in ${args.category}.${relatedInfo}`,
                 },
               ],
             };
@@ -212,6 +239,58 @@ Content style: write a current-state snapshot — what IS true right now, not wh
           return {
             content: [
               { type: 'text', text: `Bumped "${args.key}".` },
+            ],
+          };
+        },
+      ),
+
+      tool(
+        'delete_entry',
+        `Delete a memory entry. Will REFUSE if the entry still has relations — you must remove or transfer them first with remove_relation/add_relation.
+
+This forces you to think about the impact: if entry X involves Y, deleting X without handling that relation would leave Y with a broken link. Review connected entries, reorganize relations, then retry.`,
+        {
+          key: z.string().describe('The entry key to delete'),
+        },
+        async (args) => {
+          const entry = getEntry(args.key);
+          if (!entry) {
+            return {
+              content: [
+                { type: 'text', text: `Entry "${args.key}" not found.` },
+              ],
+            };
+          }
+
+          // Check for existing relations — refuse deletion if any exist
+          const relations = getRelations(args.key);
+          if (relations.length > 0) {
+            const relList = relations.map((r) => {
+              const direction = r.source_key === args.key ? 'outgoing' : 'incoming';
+              const otherKey = r.source_key === args.key ? r.target_key : r.source_key;
+              return `  - ${direction} ${r.relation_type}: ${otherKey}`;
+            }).join('\n');
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Cannot delete "${args.key}" — it has ${relations.length} relation(s):\n${relList}\n\nRemove or transfer these relations first (use remove_relation/add_relation), then retry. Think about whether the connected entries need updating too.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          const deleted = deleteEntry(args.key);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: deleted
+                  ? `Deleted entry "${args.key}" (was in ${entry.category}).`
+                  : `Failed to delete "${args.key}".`,
+              },
             ],
           };
         },

@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 
 import {
+  ASSISTANT_NAME,
   CONTAINER_IDLE_TIMEOUT,
   CONTAINER_IMAGE,
   CONTAINER_IPC_POLL_INTERVAL,
@@ -53,6 +54,7 @@ export interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  agentName?: string;
 }
 
 export interface ContainerOutput {
@@ -139,6 +141,19 @@ function buildVolumeMounts(
     containerPath: '/workspace/ipc',
     readonly: false,
   });
+
+  // Dev hot reload: mount agent-runner dist/ for live code updates.
+  // When the local compiled dist exists, it overrides the code baked into the image.
+  // Combined with `npm run dev:agent` (tsc --watch), new containers get
+  // the latest code without needing to rebuild the image.
+  const agentDistDir = path.join(projectRoot, 'container', 'agent-runner', 'dist');
+  if (fs.existsSync(agentDistDir)) {
+    mounts.push({
+      hostPath: agentDistDir,
+      containerPath: '/app/dist',
+      readonly: true,
+    });
+  }
 
   // Environment file directory (workaround for Apple Container -i env var bug)
   // Only expose specific auth variables needed by Claude Code, not the entire .env
@@ -573,6 +588,7 @@ interface BootstrapInput {
   groupFolder: string;
   chatJid: string;
   isMain: boolean;
+  agentName?: string;
 }
 
 interface InboxMessage {
@@ -725,6 +741,7 @@ export class ContainerManager {
       groupFolder: group.folder,
       chatJid: conversationId,
       isMain: false,
+      agentName: ASSISTANT_NAME,
     };
     container.stdin.write(JSON.stringify(bootstrap));
     container.stdin.end();

@@ -14,6 +14,7 @@ import {
 } from './auth.js';
 import { ASSISTANT_NAME, GROUPS_DIR } from './config.js';
 import { getLimits, saveLimits, getMemoryContextContent } from './memory/generate-context.js';
+import { feedExchange, getProcessingStatus, resetContextAgent } from './memory/context-agent.js';
 import { logger } from './logger.js';
 import { loadChannelsConfig } from './channels-config.js';
 import {
@@ -420,9 +421,19 @@ export function startWebServer(
             data: { jid: conversationId, name: renamedTo },
           });
         }
-        // Interrupted queries return empty response — don't broadcast anything,
-        // the next queued message will produce the real response.
-        if (!response) return;
+        // Empty response = interrupted or already sent via reply IPC.
+        // Always send 'done' status so the typing indicator clears.
+        if (!response) {
+          broadcastToClients({
+            type: 'agent_status',
+            data: {
+              conversation_id: conversationId,
+              status: 'done',
+              timestamp: new Date().toISOString(),
+            },
+          });
+          return;
+        }
 
         // Broadcast main (final) message with text + speak audio segments
         broadcastToClients({
@@ -552,6 +563,35 @@ export function startWebServer(
     }
     const merged = saveLimits(limits);
     res.json({ ok: true, limits: merged });
+  });
+
+  // Memory testing/debugging endpoints
+  app.get('/api/memory/status', authMiddleware, (_req, res) => {
+    res.json(getProcessingStatus());
+  });
+
+  app.post('/api/memory/feed', authMiddleware, (req, res) => {
+    const { channel, conversation, user_message, assistant_response } = req.body;
+    if (!user_message || !assistant_response) {
+      return res.status(400).json({ error: 'user_message and assistant_response required' });
+    }
+    feedExchange({
+      channel: channel || 'test',
+      conversation_name: conversation || 'Test',
+      user_message,
+      assistant_response,
+      timestamp: new Date().toISOString(),
+    });
+    res.json({ ok: true, status: getProcessingStatus() });
+  });
+
+  app.post('/api/memory/wipe', authMiddleware, async (_req, res) => {
+    try {
+      await resetContextAgent();
+      res.json({ ok: true, message: 'Memory wiped — clean state' });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   // Device management endpoints
