@@ -10,8 +10,8 @@ export const useAgentStatusStore = create<AgentStatusState>((set) => ({
   status: {},
 
   handleAgentStatus: (conversationId: string, status: string) => {
-    // "done" and "error" are terminal — clear the indicator
-    if (status === 'done' || status === 'error') {
+    // "done", "error", and "interrupted" are terminal — clear the indicator
+    if (status === 'done' || status === 'error' || status === 'interrupted') {
       set((state) => ({
         status: { ...state.status, [conversationId]: null },
       }));

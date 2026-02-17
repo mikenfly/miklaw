@@ -23,7 +23,7 @@ import { initializeAuth } from './auth.js';
 import { startWebServer, notifyNewMessage } from './web-server.js';
 import { setupTailscaleFunnel, displayConnectionQR, ensureAccessToken } from './tailscale-funnel.js';
 import { loadChannelsConfig, isChannelEnabled } from './channels-config.js';
-import { createPWAConversation } from './pwa-channel.js';
+import { createPWAConversation, containerManager } from './pwa-channel.js';
 import {
   AvailableGroup,
   runContainerAgent,
@@ -910,6 +910,7 @@ async function main(): Promise<void> {
   console.log('✓ Configuration chargée');
 
   ensureContainerSystemRunning();
+  cleanupStaleContainers();
   initDatabase();
   logger.info('Database initialized');
   loadState();
@@ -990,6 +991,39 @@ async function main(): Promise<void> {
   } else {
     logger.info('WhatsApp désactivé');
     console.log('\n💡 Pour activer WhatsApp: modifiez channels.yaml\n');
+  }
+}
+
+// Graceful shutdown: stop all persistent containers
+async function gracefulShutdown(signal: string) {
+  logger.info({ signal }, 'Received shutdown signal, stopping containers...');
+  try {
+    await containerManager.shutdownAll();
+    logger.info('All containers stopped');
+  } catch (err) {
+    logger.error({ err }, 'Error during container shutdown');
+  }
+  process.exit(0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Clean up stale containers from previous runs
+function cleanupStaleContainers(): void {
+  try {
+    const output = execSync('docker ps -a --filter "name=nanoclaw-pwa-" --format "{{.Names}}"', {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    const stale = output.split('\n').map(n => n.trim()).filter(n => n);
+    if (stale.length > 0) {
+      execSync(`docker rm -f ${stale.join(' ')}`, { stdio: 'pipe', timeout: 10000 });
+      logger.info({ count: stale.length }, 'Cleaned up stale PWA containers');
+    }
+  } catch {
+    // Docker not available or no stale containers — ignore
   }
 }
 

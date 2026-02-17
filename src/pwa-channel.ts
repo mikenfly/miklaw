@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { runContainerAgent, writeTasksSnapshot, writeGroupsSnapshot } from './container-runner.js';
+import { runContainerAgent, writeTasksSnapshot, writeGroupsSnapshot, ContainerManager } from './container-runner.js';
 import {
   createPWAConversationDB,
   getPWAConversationDB,
@@ -20,7 +20,10 @@ import { RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 import { generateSpeech } from './tts-stt.js';
 
-// Session IDs for active conversations (not persisted — agent sessions are ephemeral per process lifecycle)
+// Singleton container manager for persistent PWA containers
+export const containerManager = new ContainerManager();
+
+// Session IDs for active conversations (fallback for one-shot mode)
 const pwaSessions = new Map<string, string>();
 
 export interface PWAConversationInfo {
@@ -95,6 +98,7 @@ export function renamePWAConversation(id: string, name: string): boolean {
 
 export function deletePWAConversation(id: string): boolean {
   pwaSessions.delete(id);
+  containerManager.shutdownContainer(id);
   return deletePWAConversationDB(id);
 }
 
@@ -242,6 +246,82 @@ async function processAudioIpc(
   return segments;
 }
 
+/**
+ * Real-time watcher that polls reply IPC files during container execution
+ * and broadcasts them immediately via callback.
+ */
+interface RealtimeWatcher {
+  stop: () => void;
+}
+
+function startRealtimeIpcWatcher(
+  conversationId: string,
+  groupFolder: string,
+  onReply: (reply: ReplyMessage) => void,
+): RealtimeWatcher {
+  const messagesIpcDir = path.join(DATA_DIR, 'ipc', groupFolder, 'messages');
+  const audioOutputDir = path.join(GROUPS_DIR, groupFolder, 'audio');
+  let running = true;
+
+  const poll = async () => {
+    while (running) {
+      try {
+        if (fs.existsSync(messagesIpcDir)) {
+          const files = fs.readdirSync(messagesIpcDir)
+            .filter((f) => f.endsWith('.json'))
+            .sort();
+
+          for (const file of files) {
+            if (!running) break;
+            const filePath = path.join(messagesIpcDir, file);
+            try {
+              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              if (data.type !== 'reply') continue; // Skip non-reply IPC files
+
+              const reply = data as ReplyIpcFile;
+              const replyMsg: ReplyMessage = { text: reply.text };
+
+              // Generate TTS if audio_text provided
+              if (reply.audio_text) {
+                fs.mkdirSync(audioOutputDir, { recursive: true });
+                const audioFilename = `tts-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.mp3`;
+                const outputPath = path.join(audioOutputDir, audioFilename);
+                logger.info({ title: reply.audio_title, textLength: reply.audio_text.length }, 'RT: Generating TTS for reply');
+                await generateSpeech(reply.audio_text, outputPath);
+                replyMsg.audioSegments = [{
+                  url: `audio/${audioFilename}`,
+                  title: reply.audio_title || undefined,
+                }];
+              }
+
+              // Save to DB and broadcast immediately
+              const replyMsgId = generatePWAMessageId();
+              addPWAMessage(replyMsgId, conversationId, 'assistant', reply.text, undefined, replyMsg.audioSegments);
+              onReply(replyMsg);
+
+              // Delete processed file
+              fs.unlinkSync(filePath);
+              logger.info({ conversationId, file }, 'Real-time reply broadcast');
+            } catch (err) {
+              logger.error({ file, err }, 'Failed to process real-time reply');
+              try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+            }
+          }
+        }
+      } catch (err) {
+        logger.error({ err }, 'Real-time watcher poll error');
+      }
+      if (running) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+  };
+
+  poll();
+
+  return { stop: () => { running = false; } };
+}
+
 export async function sendToPWAAgent(
   conversationId: string,
   userMessage: string,
@@ -249,7 +329,8 @@ export async function sendToPWAAgent(
   onStatus?: OnStatusCallback,
   audioMode?: boolean,
   skipUserMessage?: boolean,
-): Promise<{ response: string; messageId: string; renamedTo?: string; audioSegments?: AudioSegment[]; replyMessages?: ReplyMessage[] }> {
+  onRealtimeReply?: (reply: ReplyMessage) => void,
+): Promise<{ response: string; messageId: string; renamedTo?: string; audioSegments?: AudioSegment[] }> {
   const conversation = getPWAConversationDB(conversationId);
   if (!conversation) {
     throw new Error('Conversation not found');
@@ -312,25 +393,33 @@ Règles :
     added_at: conversation.created_at,
   };
 
-  const sessionId = pwaSessions.get(conversationId);
-
   // Prepare snapshots
   writeTasksSnapshot(virtualGroup.folder, false, []);
   writeGroupsSnapshot(virtualGroup.folder, false, [], new Set());
 
+  // Start real-time reply watcher if callback provided
+  const watcher = onRealtimeReply
+    ? startRealtimeIpcWatcher(conversationId, virtualGroup.folder, onRealtimeReply)
+    : null;
+
   try {
     logger.info({ conversationId, audioMode }, 'Calling PWA agent');
 
-    const output = await runContainerAgent(virtualGroup, {
-      prompt,
-      sessionId,
-      groupFolder: virtualGroup.folder,
-      chatJid: conversationId,
-      isMain: false,
-    }, onStatus ? (status: string) => onStatus(conversationId, status) : undefined);
+    const output = await containerManager.sendMessageAndWait(
+      conversationId,
+      virtualGroup,
+      { prompt, audioMode },
+      onStatus ? (status: string) => onStatus(conversationId, status) : undefined,
+    );
 
-    if (output.newSessionId) {
-      pwaSessions.set(conversationId, output.newSessionId);
+    // Stop real-time watcher now that container has exited
+    watcher?.stop();
+
+    // Interrupted by a new user message — don't save anything, the next
+    // queued message will resume the conversation with full session context.
+    if (output.status === 'interrupted') {
+      logger.info({ conversationId }, 'Query interrupted by user message, skipping response save');
+      return { response: '', messageId: '', renamedTo };
     }
 
     if (output.status === 'error') {
@@ -356,18 +445,16 @@ Règles :
       }
     }
 
-    // Process reply IPC files → separate message bubbles
-    let replyMessages: ReplyMessage[] | undefined;
+    // Process remaining reply IPC files (ones the real-time watcher didn't catch)
     try {
       const replies = await processReplyIpc(conversationId, virtualGroup.folder);
       if (replies.length > 0) {
-        replyMessages = replies;
-        // Store each reply as a separate DB message
         for (const reply of replies) {
           const replyMsgId = generatePWAMessageId();
           addPWAMessage(replyMsgId, conversationId, 'assistant', reply.text, undefined, reply.audioSegments);
+          onRealtimeReply?.(reply);
         }
-        logger.info({ conversationId, count: replies.length }, 'Reply messages processed');
+        logger.info({ conversationId, count: replies.length }, 'Remaining reply messages processed');
       }
     } catch (err) {
       logger.error({ conversationId, err }, 'Failed to process reply IPC');
@@ -377,8 +464,9 @@ Règles :
     const assistantMsgId = generatePWAMessageId();
     addPWAMessage(assistantMsgId, conversationId, 'assistant', response, undefined, audioSegments);
 
-    return { response, messageId: assistantMsgId, renamedTo, audioSegments, replyMessages };
+    return { response, messageId: assistantMsgId, renamedTo, audioSegments };
   } catch (err) {
+    watcher?.stop();
     logger.error({ conversationId, err }, 'Failed to call PWA agent');
     throw err;
   }

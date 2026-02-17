@@ -23,6 +23,7 @@ import {
   renamePWAConversation,
   deletePWAConversation,
   sendToPWAAgent,
+  containerManager,
 } from './pwa-channel.js';
 import {
   savePushSubscription,
@@ -310,6 +311,28 @@ export function startWebServer(
     },
   );
 
+  // Interrupt the agent for a conversation
+  app.post(
+    '/api/conversations/:id/interrupt',
+    authMiddleware,
+    (req: AuthRequest, res) => {
+      const { id } = req.params;
+
+      containerManager.interruptContainer(id);
+
+      broadcastToClients({
+        type: 'agent_status',
+        data: {
+          conversation_id: id,
+          status: 'interrupted',
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      res.json({ success: true });
+    },
+  );
+
   // Get file from conversation (supports ?token= query param for <img src> usage)
   app.get(
     '/api/conversations/:id/files/*',
@@ -356,6 +379,8 @@ export function startWebServer(
   );
 
   // --- Helper: run agent and broadcast results (text + audio messages) ---
+  // Reply messages are broadcast in real-time via the watcher callback.
+  // Only the final main message is broadcast here after the agent finishes.
   function runAgentAndBroadcast(conversationId: string, content: string, audioMode: boolean, skipUserMessage?: boolean) {
     sendToPWAAgent(
       conversationId,
@@ -373,30 +398,32 @@ export function startWebServer(
       },
       audioMode,
       skipUserMessage,
+      // Real-time reply callback: broadcast each reply immediately as it arrives
+      (reply) => {
+        broadcastToClients({
+          type: 'message',
+          data: {
+            chat_jid: conversationId,
+            sender_name: ASSISTANT_NAME,
+            content: `${ASSISTANT_NAME}: ${reply.text}`,
+            timestamp: new Date().toISOString(),
+            ...(reply.audioSegments && { audio_segments: reply.audioSegments }),
+          },
+        });
+      },
     )
-      .then(({ response, renamedTo, audioSegments, replyMessages }) => {
+      .then(({ response, renamedTo, audioSegments }) => {
         if (renamedTo) {
           broadcastToClients({
             type: 'conversation_renamed',
             data: { jid: conversationId, name: renamedTo },
           });
         }
-        // Broadcast reply messages first (separate bubbles)
-        if (replyMessages) {
-          for (const reply of replyMessages) {
-            broadcastToClients({
-              type: 'message',
-              data: {
-                chat_jid: conversationId,
-                sender_name: ASSISTANT_NAME,
-                content: `${ASSISTANT_NAME}: ${reply.text}`,
-                timestamp: new Date().toISOString(),
-                ...(reply.audioSegments && { audio_segments: reply.audioSegments }),
-              },
-            });
-          }
-        }
-        // Broadcast main message with text + audio segments
+        // Interrupted queries return empty response — don't broadcast anything,
+        // the next queued message will produce the real response.
+        if (!response) return;
+
+        // Broadcast main (final) message with text + speak audio segments
         broadcastToClients({
           type: 'message',
           data: {

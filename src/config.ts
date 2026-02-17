@@ -32,6 +32,13 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
 ); // 10MB default
 export const IPC_POLL_INTERVAL = 1000;
 
+// Persistent container settings
+export const CONTAINER_IDLE_TIMEOUT = parseInt(
+  process.env.CONTAINER_IDLE_TIMEOUT || '300000',
+  10,
+); // 5 min default
+export const CONTAINER_IPC_POLL_INTERVAL = 300; // 300ms for inbox/outbox polling
+
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
