@@ -89,6 +89,14 @@
   padding: 0;
 }
 
+/* Strip pre styling when it wraps a mermaid diagram */
+.message-bubble__text pre:has(.mermaid-diagram) {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
 @media (max-width: 767px) {
   .message-bubble {
     max-width: 90%;
