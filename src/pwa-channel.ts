@@ -261,28 +261,46 @@ function startRealtimeIpcWatcher(
   onReply: (reply: ReplyMessage) => void,
 ): RealtimeWatcher {
   const messagesIpcDir = path.join(DATA_DIR, 'ipc', groupFolder, 'messages');
+  const audioIpcDir = path.join(DATA_DIR, 'ipc', groupFolder, 'audio');
   const audioOutputDir = path.join(GROUPS_DIR, groupFolder, 'audio');
   let running = true;
 
   const poll = async () => {
     while (running) {
       try {
+        // ── Collect all IPC files from both directories ──
+        interface IpcEntry {
+          filePath: string;
+          filename: string;
+          source: 'message' | 'audio';
+        }
+        const entries: IpcEntry[] = [];
+
         if (fs.existsSync(messagesIpcDir)) {
-          const files = fs.readdirSync(messagesIpcDir)
-            .filter((f) => f.endsWith('.json'))
-            .sort();
+          for (const f of fs.readdirSync(messagesIpcDir).filter((f) => f.endsWith('.json'))) {
+            entries.push({ filePath: path.join(messagesIpcDir, f), filename: f, source: 'message' });
+          }
+        }
+        if (fs.existsSync(audioIpcDir)) {
+          for (const f of fs.readdirSync(audioIpcDir).filter((f) => f.endsWith('.json'))) {
+            entries.push({ filePath: path.join(audioIpcDir, f), filename: f, source: 'audio' });
+          }
+        }
 
-          for (const file of files) {
-            if (!running) break;
-            const filePath = path.join(messagesIpcDir, file);
-            try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        // Sort by filename (timestamp-based) to preserve agent's intended order
+        entries.sort((a, b) => a.filename.localeCompare(b.filename));
+
+        for (const entry of entries) {
+          if (!running) break;
+          try {
+            const raw = fs.readFileSync(entry.filePath, 'utf-8');
+            const data = JSON.parse(raw);
+
+            if (entry.source === 'message') {
               if (data.type !== 'reply') continue; // Skip non-reply IPC files
-
               const reply = data as ReplyIpcFile;
               const replyMsg: ReplyMessage = { text: reply.text };
 
-              // Generate TTS if audio_text provided
               if (reply.audio_text) {
                 fs.mkdirSync(audioOutputDir, { recursive: true });
                 const audioFilename = `tts-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.mp3`;
@@ -295,18 +313,36 @@ function startRealtimeIpcWatcher(
                 }];
               }
 
-              // Save to DB and broadcast immediately
               const replyMsgId = generatePWAMessageId();
               addPWAMessage(replyMsgId, conversationId, 'assistant', reply.text, undefined, replyMsg.audioSegments);
               onReply(replyMsg);
+            } else {
+              // Speak audio file
+              const speakData = data as SpeakIpcFile;
+              fs.mkdirSync(audioOutputDir, { recursive: true });
+              const audioFilename = `tts-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.mp3`;
+              const outputPath = path.join(audioOutputDir, audioFilename);
+              logger.info({ title: speakData.title, textLength: speakData.text.length }, 'RT: Generating TTS for speak');
+              await generateSpeech(speakData.text, outputPath);
 
-              // Delete processed file
-              fs.unlinkSync(filePath);
-              logger.info({ conversationId, file }, 'Real-time reply broadcast');
-            } catch (err) {
-              logger.error({ file, err }, 'Failed to process real-time reply');
-              try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+              const replyMsg: ReplyMessage = {
+                text: speakData.title || '',
+                audioSegments: [{
+                  url: `audio/${audioFilename}`,
+                  title: speakData.title || undefined,
+                }],
+              };
+
+              const msgId = generatePWAMessageId();
+              addPWAMessage(msgId, conversationId, 'assistant', replyMsg.text, undefined, replyMsg.audioSegments);
+              onReply(replyMsg);
             }
+
+            fs.unlinkSync(entry.filePath);
+            logger.info({ conversationId, file: entry.filename, source: entry.source }, 'Real-time IPC broadcast');
+          } catch (err) {
+            logger.error({ file: entry.filename, err }, 'Failed to process real-time IPC');
+            try { fs.unlinkSync(entry.filePath); } catch { /* ignore */ }
           }
         }
       } catch (err) {
@@ -431,19 +467,16 @@ Règles :
       return { response: errorMsg, messageId: errorMsgId };
     }
 
-    // Process audio IPC files (speak tool calls) → generate TTS
+    // Process remaining audio IPC files (speak tool calls not caught by real-time watcher)
     let audioSegments: AudioSegment[] | undefined;
-    if (audioMode) {
-      try {
-        if (onStatus) onStatus(conversationId, 'Génération audio...');
-        const segments = await processAudioIpc(conversationId, virtualGroup.folder);
-        if (segments.length > 0) {
-          audioSegments = segments;
-          logger.info({ conversationId, count: segments.length }, 'Audio messages generated');
-        }
-      } catch (err) {
-        logger.error({ conversationId, err }, 'Failed to process audio IPC');
+    try {
+      const segments = await processAudioIpc(conversationId, virtualGroup.folder);
+      if (segments.length > 0) {
+        audioSegments = segments;
+        logger.info({ conversationId, count: segments.length }, 'Remaining audio messages generated (fallback)');
       }
+    } catch (err) {
+      logger.error({ conversationId, err }, 'Failed to process audio IPC');
     }
 
     // Process remaining reply IPC files (ones the real-time watcher didn't catch)
