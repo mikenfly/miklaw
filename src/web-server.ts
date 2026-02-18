@@ -15,6 +15,7 @@ import {
 import { ASSISTANT_NAME, GROUPS_DIR } from './config.js';
 import { getLimits, saveLimits, getMemoryContextContent } from './memory/generate-context.js';
 import { feedExchange, getProcessingStatus, resetContextAgent } from './memory/context-agent.js';
+import { readTraces } from './memory/trace-logger.js';
 import { logger } from './logger.js';
 import { loadChannelsConfig } from './channels-config.js';
 import {
@@ -633,6 +634,13 @@ export function startWebServer(
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
+  });
+
+  app.get('/api/memory/traces', authMiddleware, (req, res) => {
+    const limit = Math.min(parseInt(String(req.query.limit || '50'), 10), 500);
+    const conversation = req.query.conversation ? String(req.query.conversation) : undefined;
+    const traces = readTraces({ limit, conversation });
+    res.json({ traces, count: traces.length });
   });
 
   // Device management endpoints
