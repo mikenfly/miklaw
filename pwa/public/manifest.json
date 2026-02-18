@@ -4,8 +4,8 @@
   "description": "Assistant personnel Claude",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a0a",
-  "theme_color": "#1a1a1a",
+  "background_color": "#141416",
+  "theme_color": "#141416",
   "orientation": "portrait-primary",
   "icons": [
     {

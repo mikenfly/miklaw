@@ -100,7 +100,7 @@ displayQR(qrUrl);
 ╚═══════════════════════════════════════╝
 
 PWA Access:
-https://your-machine.ts.net/?token=abc123...
+https://novabot.work/?token=abc123...
 
 Temporary token expires in 5 minutes.
 ```
@@ -109,7 +109,7 @@ Temporary token expires in 5 minutes.
 
 **User opens URL** :
 ```
-https://your-machine.ts.net/?token=abc123...
+https://novabot.work/?token=abc123...
 ```
 
 **Frontend (public/app.js)** :
@@ -207,7 +207,7 @@ const response = await fetch('/api/conversations', {
 });
 
 // WebSocket connections
-const ws = new WebSocket(`wss://your-machine.ts.net/ws?token=${token}`);
+const ws = new WebSocket(`wss://novabot.work/ws?token=${token}`);
 ```
 
 **Backend middleware (src/web-server.ts)** :

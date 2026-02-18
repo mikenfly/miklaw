@@ -79,6 +79,14 @@ export function startWebServer(
 
   // Serve static files from pwa/dist/ with SPA fallback
   const pwaDistDir = path.join(__dirname, '..', 'pwa', 'dist');
+
+  // SW and HTML must never be browser-cached so updates propagate immediately
+  app.get(['/sw.js', '/index.html', '/manifest.json'], (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    if (_req.path === '/sw.js') res.setHeader('Service-Worker-Allowed', '/');
+    next();
+  });
+
   app.use(express.static(pwaDistDir));
 
   // Health check

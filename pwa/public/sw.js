@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nanoclaw-pwa-v1';
+const CACHE_NAME = 'nanoclaw-pwa-v2';
 
 // Install: skip waiting to activate immediately
 self.addEventListener('install', () => {
