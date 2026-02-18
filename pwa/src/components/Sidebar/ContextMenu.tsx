@@ -6,14 +6,16 @@ import './ContextMenu.css';
 interface ContextMenuProps {
   conversationId: string;
   conversationName: string;
+  autoRename: boolean;
   x: number;
   y: number;
   onClose: () => void;
 }
 
-export default function ContextMenu({ conversationId, conversationName, x, y, onClose }: ContextMenuProps) {
+export default function ContextMenu({ conversationId, conversationName, autoRename, x, y, onClose }: ContextMenuProps) {
   const renameConversation = useConversationStore((s) => s.renameConversation);
   const deleteConversation = useConversationStore((s) => s.deleteConversation);
+  const toggleAutoRename = useConversationStore((s) => s.toggleAutoRename);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(conversationName);
@@ -59,6 +61,11 @@ export default function ContextMenu({ conversationId, conversationName, x, y, on
     onClose();
   }, [renameValue, conversationName, conversationId, renameConversation, onClose]);
 
+  const handleToggleAutoRename = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    toggleAutoRename(conversationId);
+  }, [conversationId, toggleAutoRename]);
+
   const handleDelete = useCallback(async () => {
     await deleteConversation(conversationId);
     onClose();
@@ -97,6 +104,10 @@ export default function ContextMenu({ conversationId, conversationName, x, y, on
         <>
           <button className="context-menu__item" onClick={handleRename}>
             Renommer
+          </button>
+          <button className="context-menu__toggle" onClick={handleToggleAutoRename}>
+            <span>Titrage auto</span>
+            <span className={`context-menu__toggle-dot ${autoRename ? 'context-menu__toggle-dot--active' : ''}`} />
           </button>
           <button className="context-menu__item context-menu__item--danger" onClick={() => setShowDeleteConfirm(true)}>
             Supprimer

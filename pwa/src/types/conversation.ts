@@ -4,6 +4,7 @@ export interface Conversation {
   folder: string;
   lastActivity: string;
   type: 'pwa';
+  autoRename: boolean;
 }
 
 export interface AudioSegment {

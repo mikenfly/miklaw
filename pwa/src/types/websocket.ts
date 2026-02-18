@@ -19,6 +19,7 @@ export interface ConversationCreatedData {
   name: string;
   lastActivity: string;
   type: 'pwa';
+  autoRename?: boolean;
 }
 
 export interface ConversationRenamedData {

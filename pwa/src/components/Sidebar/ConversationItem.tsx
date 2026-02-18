@@ -91,6 +91,7 @@ export default function ConversationItem({ conversation }: ConversationItemProps
         <ContextMenu
           conversationId={conversation.jid}
           conversationName={conversation.name}
+          autoRename={conversation.autoRename}
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}

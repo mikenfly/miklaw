@@ -32,8 +32,10 @@ import {
   removePushSubscription,
   generatePWAMessageId,
   addPWAMessage,
+  setPWAAutoRename,
 } from './db.js';
 import { transcribeAudio } from './tts-stt.js';
+import { maybeEvaluateTitle } from './title-agent.js';
 import crypto from 'crypto';
 import os from 'os';
 
@@ -266,27 +268,36 @@ export function startWebServer(
     },
   );
 
-  // Rename a conversation
+  // Update a conversation (rename and/or toggle auto-rename)
   app.patch(
     '/api/conversations/:id',
     authMiddleware,
     (req: AuthRequest, res) => {
       const { id } = req.params;
-      const { name } = req.body;
+      const { name, autoRename } = req.body;
 
-      if (!name || typeof name !== 'string') {
-        return res.status(400).json({ error: 'Name is required' });
+      if (!name && autoRename === undefined) {
+        return res.status(400).json({ error: 'Name or autoRename is required' });
       }
 
-      const success = renamePWAConversation(id, name);
-      if (!success) {
-        return res.status(404).json({ error: 'Conversation not found' });
+      // Manual rename → also disable auto-rename
+      if (name && typeof name === 'string') {
+        const success = renamePWAConversation(id, name);
+        if (!success) {
+          return res.status(404).json({ error: 'Conversation not found' });
+        }
+        setPWAAutoRename(id, false);
+
+        broadcastToClients({
+          type: 'conversation_renamed',
+          data: { jid: id, name },
+        });
       }
 
-      broadcastToClients({
-        type: 'conversation_renamed',
-        data: { jid: id, name },
-      });
+      // Toggle auto-rename
+      if (autoRename !== undefined) {
+        setPWAAutoRename(id, !!autoRename);
+      }
 
       res.json({ success: true });
     },
@@ -453,6 +464,10 @@ export function startWebServer(
               timestamp: new Date().toISOString(),
             },
           });
+          // Still evaluate title (conversation may have progressed via IPC replies)
+          maybeEvaluateTitle(conversationId, (id, name) => {
+            broadcastToClients({ type: 'conversation_renamed', data: { jid: id, name } });
+          }).catch((err) => logger.error({ err, conversationId }, 'Title agent error'));
           return;
         }
 
@@ -475,6 +490,11 @@ export function startWebServer(
             timestamp: new Date().toISOString(),
           },
         });
+
+        // Async title evaluation (non-blocking, fire-and-forget)
+        maybeEvaluateTitle(conversationId, (id, name) => {
+          broadcastToClients({ type: 'conversation_renamed', data: { jid: id, name } });
+        }).catch((err) => logger.error({ err, conversationId }, 'Title agent error'));
       })
       .catch((err) => {
         logger.error({ err, conversationId }, 'PWA agent error');

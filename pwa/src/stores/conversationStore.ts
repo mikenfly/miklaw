@@ -13,6 +13,7 @@ interface ConversationState {
   fetchConversations: () => Promise<void>;
   createConversation: (name?: string) => Promise<string>;
   renameConversation: (id: string, name: string) => Promise<void>;
+  toggleAutoRename: (id: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   setActive: (id: string) => void;
   setDraft: (id: string, text: string) => void;
@@ -64,9 +65,22 @@ export const useConversationStore = create<ConversationState>((set) => ({
     await api.patch('/api/conversations/' + id, { name });
     set((state) => ({
       conversations: state.conversations.map((c) =>
-        c.jid === id ? { ...c, name } : c,
+        c.jid === id ? { ...c, name, autoRename: false } : c,
       ),
     }));
+  },
+
+  toggleAutoRename: async (id: string) => {
+    const conv = useConversationStore.getState().conversations.find((c) => c.jid === id);
+    if (!conv) return;
+    const newValue = !conv.autoRename;
+    // Optimistic update
+    set((state) => ({
+      conversations: state.conversations.map((c) =>
+        c.jid === id ? { ...c, autoRename: newValue } : c,
+      ),
+    }));
+    await api.patch('/api/conversations/' + id, { autoRename: newValue });
   },
 
   deleteConversation: async (id: string) => {

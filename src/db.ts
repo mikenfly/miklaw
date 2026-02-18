@@ -121,6 +121,13 @@ export function initDatabase(): void {
   } catch {
     /* column already exists */
   }
+
+  // Add auto_rename column to pwa_conversations (1 = enabled by default)
+  try {
+    db.exec(`ALTER TABLE pwa_conversations ADD COLUMN auto_rename INTEGER DEFAULT 1`);
+  } catch {
+    /* column already exists */
+  }
 }
 
 /**
@@ -447,6 +454,7 @@ export interface PWAConversationRow {
   created_at: string;
   last_activity: string;
   archived: number;
+  auto_rename: number;
 }
 
 export interface PWAMessageRow {
@@ -496,6 +504,22 @@ export function renamePWAConversation(id: string, name: string): boolean {
     .prepare(`UPDATE pwa_conversations SET name = ? WHERE id = ?`)
     .run(name, id);
   return result.changes > 0;
+}
+
+export function setPWAAutoRename(id: string, enabled: boolean): boolean {
+  const result = db
+    .prepare(`UPDATE pwa_conversations SET auto_rename = ? WHERE id = ?`)
+    .run(enabled ? 1 : 0, id);
+  return result.changes > 0;
+}
+
+export function countPWAUserMessages(conversationId: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM pwa_messages WHERE conversation_id = ? AND sender = 'user'`,
+    )
+    .get(conversationId) as { count: number };
+  return row.count;
 }
 
 export function deletePWAConversation(id: string): boolean {

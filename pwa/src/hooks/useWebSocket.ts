@@ -39,6 +39,7 @@ export function useWebSocket(): void {
             folder: `pwa-${msg.data.jid}`,
             lastActivity: msg.data.lastActivity,
             type: msg.data.type,
+            autoRename: msg.data.autoRename ?? true,
           });
           break;
         case 'conversation_renamed':

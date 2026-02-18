@@ -33,6 +33,7 @@ export interface PWAConversationInfo {
   folder: string;
   lastActivity: string;
   type: 'pwa';
+  autoRename: boolean;
 }
 
 function toConversationInfo(row: PWAConversationRow): PWAConversationInfo {
@@ -42,6 +43,7 @@ function toConversationInfo(row: PWAConversationRow): PWAConversationInfo {
     folder: `pwa-${row.id}`,
     lastActivity: row.last_activity,
     type: 'pwa',
+    autoRename: row.auto_rename !== 0,
   };
 }
 
