@@ -14,6 +14,14 @@ import {
   updateEmbedding,
 } from './db.js';
 import { generateEmbedding, embeddingToBuffer } from './embeddings.js';
+import {
+  startTrace,
+  traceInjection,
+  traceContextStart,
+  traceContextToolCall,
+  traceContextResult,
+  flushTrace,
+} from './trace-logger.js';
 import { generateMemoryContext } from './generate-context.js';
 import { runRagAgent, type RagResult } from './rag-agent.js';
 import { CONTEXT_AGENT_SYSTEM_PROMPT } from './system-prompt.js';
@@ -240,12 +248,23 @@ async function runRagForExchange(pending: PendingRag): Promise<void> {
     log(`RAG[${pending.sequence}] done: priority=${ragResult.priority}, keys=${ragResult.relevantKeys.length}, ${elapsed}ms`);
 
     // Handle injection for important/critical
-    if (ragResult.priority === 'important' || ragResult.priority === 'critical') {
+    const isInjected = ragResult.priority === 'important' || ragResult.priority === 'critical';
+    const isCritical = ragResult.priority === 'critical' && !!criticalInjectionCallback;
+    if (isInjected) {
       writeUrgentContext(ragResult);
     }
-    if (ragResult.priority === 'critical' && criticalInjectionCallback) {
-      criticalInjectionCallback(ragResult.exchange);
+    if (isCritical) {
+      criticalInjectionCallback!(ragResult.exchange);
     }
+
+    // Trace: injection details
+    traceInjection(pending.exchangeId, {
+      urgentContextWritten: isInjected,
+      urgentContextFile: isInjected
+        ? path.basename(urgentContextPath(ragResult.exchange.conversationId))
+        : undefined,
+      criticalInjectionTriggered: isCritical,
+    });
 
     // Store completed result
     completedRagResults.push({ sequence: pending.sequence, ragResult });
@@ -338,6 +357,7 @@ async function processContextAgentQueue(): Promise<void> {
   if (processing || contextAgentQueue.length === 0) return;
 
   processing = true;
+  let batchExchangeIds: string[] = [];
 
   try {
     // Drain all pending results into a batch
@@ -351,6 +371,11 @@ async function processContextAgentQueue(): Promise<void> {
     const channels = [...new Set(batch.map(r => r.exchange.channel))].join(', ');
     const ragInfo = hasRagContext ? ' (with RAG pre-context)' : '';
     log(`Processing ${batch.length} exchange(s) from ${channels}${ragInfo}`);
+
+    // Trace: mark context agent start for all exchanges in batch
+    batchExchangeIds = batch.map(r => r.exchangeId);
+    for (const eid of batchExchangeIds) traceContextStart(eid);
+    const contextStartTime = Date.now();
 
     const isFirstQuery = sessionId === null;
     const fullPrompt = isFirstQuery
@@ -375,6 +400,8 @@ async function processContextAgentQueue(): Promise<void> {
     });
 
     let toolCallCount = 0;
+    let contextCostUsd: number | null = null;
+    let contextTurns = 0;
 
     for await (const message of q) {
       // Capture session_id from any message
@@ -385,15 +412,22 @@ async function processContextAgentQueue(): Promise<void> {
         }
       }
 
-      // Log tool calls from assistant messages
+      // Log + trace tool calls from assistant messages
       if (message.type === 'assistant' && 'message' in message) {
         const content = (message as any).message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block.type === 'tool_use') {
               toolCallCount++;
-              const summary = summarizeToolInput(block.name, block.input as Record<string, any>);
-              log(`  → ${block.name.replace('mcp__memory__', '')}(${summary})`);
+              const toolName = block.name.replace('mcp__memory__', '');
+              const input = block.input as Record<string, any>;
+              const summary = summarizeToolInput(block.name, input);
+              log(`  → ${toolName}(${summary})`);
+
+              // Trace: record context agent tool calls for all exchanges in batch
+              for (const eid of batchExchangeIds) {
+                traceContextToolCall(eid, toolName, input);
+              }
             }
           }
         }
@@ -404,6 +438,8 @@ async function processContextAgentQueue(): Promise<void> {
         const result = message as any;
         if (result.subtype === 'success') {
           log(`  ✓ Done: ${toolCallCount} tool calls, ${result.num_turns} turns, $${result.total_cost_usd?.toFixed(3) || '?'}`);
+          contextCostUsd = result.total_cost_usd ?? null;
+          contextTurns = result.num_turns ?? 0;
         } else {
           log(`  ✗ Error (${result.subtype}): ${JSON.stringify(result.errors)}`);
         }
@@ -416,10 +452,23 @@ async function processContextAgentQueue(): Promise<void> {
     if (refreshed > 0) log(`  Refreshed ${refreshed} dirty embeddings`);
     gitCommitIfChanged();
 
+    // Trace: finalize context agent for all exchanges in batch
+    const contextDuration = Date.now() - contextStartTime;
+    for (const eid of batchExchangeIds) {
+      traceContextResult(eid, {
+        durationMs: contextDuration,
+        costUsd: contextCostUsd,
+        turns: contextTurns,
+        embeddingsRefreshed: refreshed,
+      });
+    }
+
     lastCompletedAt = new Date().toISOString();
     log('Done processing exchanges');
   } catch (err) {
     log(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    // Flush any pending traces on error
+    for (const eid of batchExchangeIds) flushTrace(eid);
     lastCompletedAt = new Date().toISOString();
   } finally {
     processing = false;
@@ -482,8 +531,10 @@ export function feedExchange(exchange: ExchangeMessage): void {
 
   if (!RAG_ENABLED) {
     // Bypass RAG — feed directly to context agent
+    const bypassId = `exch-${exchangeCounter++}-${Date.now()}`;
+    startTrace(bypassId, exchange, 0);
     contextAgentQueue.push({
-      exchangeId: `exch-${exchangeCounter++}-${Date.now()}`,
+      exchangeId: bypassId,
       exchange,
       priority: 'normal',
       preContext: '',
@@ -497,6 +548,11 @@ export function feedExchange(exchange: ExchangeMessage): void {
 
   const sequence = exchangeCounter++;
   const exchangeId = `exch-${sequence}-${Date.now()}`;
+
+  // Start trace for this exchange
+  const conversationExchangesCount = recentExchanges
+    .filter(e => e.conversation_name === exchange.conversation_name).length;
+  startTrace(exchangeId, exchange, conversationExchangesCount);
 
   const pending: PendingRag = {
     sequence,

@@ -4,6 +4,11 @@ import fs from 'fs';
 import path from 'path';
 import { MEMORY_DIR, RAG_MODEL, RAG_TIMEOUT } from '../config.js';
 import { getMemoryContextContent } from './generate-context.js';
+import {
+  traceRagToolCallStart,
+  traceRagToolCall,
+  traceRagResult,
+} from './trace-logger.js';
 import { createMemoryMcpServer } from './tools.js';
 import type { ExchangeMessage } from './types.js';
 
@@ -182,6 +187,8 @@ async function executeRagQuery(
 ): Promise<RagResult> {
   let resultText = '';
   let toolCallCount = 0;
+  let costUsd: number | null = null;
+  const startTime = Date.now();
 
   try {
     for await (const message of query({
@@ -197,7 +204,7 @@ async function executeRagQuery(
         mcpServers: { memory: mcpServer },
       },
     })) {
-      // Log tool calls
+      // Log + trace tool calls
       if (message.type === 'assistant' && 'message' in message) {
         const content = (message as any).message?.content;
         if (Array.isArray(content)) {
@@ -212,6 +219,10 @@ async function executeRagQuery(
                   ? `key="${input.key}"`
                   : JSON.stringify(input).slice(0, 80);
               ragLog(`  → ${name}(${summary})`);
+
+              // Trace: record tool call with timing marker
+              traceRagToolCallStart(exchangeId, block.id);
+              traceRagToolCall(exchangeId, block.id, name, input);
             }
           }
         }
@@ -222,6 +233,7 @@ async function executeRagQuery(
         if (result.subtype === 'success' && result.result) {
           resultText = result.result;
         }
+        costUsd = result.total_cost_usd ?? null;
         ragLog(`  ✓ ${toolCallCount} tool calls, $${result.total_cost_usd?.toFixed(3) || '?'}`);
       }
     }
@@ -230,7 +242,18 @@ async function executeRagQuery(
     return fallbackResult(exchangeId, exchange, `RAG query error: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  const elapsed = Date.now() - startTime;
   const parsed = parseRagResult(exchangeId, exchange, resultText);
+
+  // Trace: record RAG result
+  traceRagResult(exchangeId, {
+    priority: parsed.priority,
+    relevantKeys: parsed.relevantKeys,
+    reasoning: parsed.reasoning,
+    costUsd,
+    durationMs: elapsed,
+  });
+
   if (resultText && parsed.relevantKeys.length === 0 && toolCallCount > 0) {
     ragLog(`  ⚠ RAG output had no keys despite ${toolCallCount} tool calls. Result snippet: ${resultText.slice(0, 200)}`);
   }
