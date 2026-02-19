@@ -15,6 +15,7 @@ import {
   IPC_POLL_INTERVAL,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
+  PRE_SEARCH_ENABLED,
   STORE_DIR,
   TIMEZONE,
   TRIGGER_PATTERN,
@@ -44,6 +45,7 @@ import {
   updateChatName,
 } from './db.js';
 import { initContextAgent, feedExchange, shutdownContextAgent } from './memory/context-agent.js';
+import { runPreSearch, writePreSearchFile, writePendingMarker, clearPendingMarker } from './memory/pre-search.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { NewMessage, RegisteredGroup, Session } from './types.js';
 import { loadJson, saveJson } from './utils.js';
@@ -219,6 +221,24 @@ async function processMessage(msg: NewMessage): Promise<void> {
     { group: group.name, messageCount: missedMessages.length },
     'Processing message',
   );
+
+  // Fire pre-search in parallel with agent startup (don't await)
+  // The container hook will wait for the result file when it sees the pending marker
+  if (PRE_SEARCH_ENABLED) {
+    writePendingMarker(msg.chat_jid);
+    runPreSearch(content)
+      .then(result => {
+        if (result) {
+          writePreSearchFile(msg.chat_jid, result);
+        }
+      })
+      .catch(() => {
+        // pre-search is best-effort
+      })
+      .finally(() => {
+        clearPendingMarker(msg.chat_jid);
+      });
+  }
 
   await setTyping(msg.chat_jid, true);
   const response = await runAgent(group, prompt, msg.chat_jid);
